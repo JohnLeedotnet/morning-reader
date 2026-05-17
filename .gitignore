@@ -1,0 +1,35 @@
+# ── 依赖 ──────────────────────────────────────────
+node_modules/
+
+# ── 构建产物 ──────────────────────────────────────
+frontend/dist/
+frontend/.vite/
+backend/dist/
+
+# ── 数据（用户数据/录音/PDF/数据库，绝不入 git） ─
+data/
+logs/
+
+# ── 证书与密钥 ────────────────────────────────────
+frontend/certs/
+*.pem
+*.key
+.env
+.env.local
+.env.*.local
+
+# ── 系统/编辑器 ───────────────────────────────────
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── iOS 原型项目（保留但不再开发） ────────────────
+Morning Reader.xcodeproj/xcuserdata/
+*.xcuserdatad/
+
+# ── Claude / 临时 ─────────────────────────────────
+.claude/settings.local.json
+*.log
+*.tmp

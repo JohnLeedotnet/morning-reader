@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Morning Reader — 极简专注风</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif;
+  background: #F9F9F9;
+  color: #111111;
+  padding: 48px 24px 80px;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Page header ── */
+.file-header {
+  text-align: center;
+  margin-bottom: 52px;
+}
+.file-header h1 { font-size: 22px; font-weight: 700; color: #111; letter-spacing: -0.5px; }
+.file-header p  { font-size: 12px; color: #888; margin-top: 4px; letter-spacing: 1.5px; text-transform: uppercase; }
+
+/* ── Section divider ── */
+.section-label {
+  display: flex; align-items: center; gap: 20px;
+  margin: 56px 0 28px;
+  font-size: 11px; font-weight: 600; letter-spacing: 2px; text-transform: uppercase;
+  color: #888;
+}
+.section-label::before, .section-label::after {
+  content: ''; flex: 1; height: 1px; background: #E5E5E5;
+}
+
+/* ═══════════════════════════════════════
+   SECTION 1 — Home
+═══════════════════════════════════════ */
+.home-bg {
+  background: #FFFFFF;
+  border: 1px solid #E5E5E5;
+  border-radius: 16px;
+  padding: 40px 36px;
+  max-width: 720px;
+  margin: 0 auto;
+}
+.home-title {
+  font-size: 26px; font-weight: 700; color: #111;
+  letter-spacing: -0.8px;
+  margin-bottom: 4px;
+}
+.home-date {
+  font-size: 13px; color: #888; margin-bottom: 32px;
+  font-weight: 400;
+}
+
+.cards-row { display: flex; gap: 16px; }
+
+.card {
+  flex: 1;
+  background: #FAFAFA;
+  border: 1px solid #E5E5E5;
+  border-radius: 12px;
+  padding: 24px;
+  display: flex; flex-direction: column; gap: 16px;
+}
+
+.card-header { display: flex; justify-content: space-between; align-items: center; }
+.name-mike   { font-size: 20px; font-weight: 700; color: #111; letter-spacing: -0.5px; }
+.name-peyton { font-size: 25px; font-weight: 700; color: #111; letter-spacing: -0.5px; }
+
+.badge {
+  background: #F3F3F3; color: #888;
+  font-size: 11px; font-weight: 500;
+  padding: 3px 9px; border-radius: 4px;
+  border: 1px solid #E5E5E5;
+}
+
+.divider { height: 1px; background: #EFEFEF; }
+
+.info-block { display: flex; flex-direction: column; gap: 8px; }
+.info-row {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 13px;
+}
+.info-row-lg { font-size: 16px; }
+.info-label { color: #888; font-weight: 400; }
+.info-val   { color: #111; font-weight: 600; }
+
+.btn {
+  border: none; border-radius: 8px;
+  font-family: 'Inter', inherit; cursor: pointer;
+  font-weight: 600; letter-spacing: 0.1px;
+  transition: background 0.15s;
+}
+.btn-mike   { background: #111; color: white; font-size: 14px; padding: 13px; margin-top: auto; }
+.btn-peyton { background: #111; color: white; font-size: 17.5px; padding: 14px; margin-top: auto; }
+.btn:hover  { background: #333; }
+
+/* ═══════════════════════════════════════
+   SECTION 2 — Reading Page
+═══════════════════════════════════════ */
+.reading-frame {
+  max-width: 480px;
+  margin: 0 auto;
+  border-radius: 16px;
+  overflow: hidden;
+  border: 1px solid #CCCCCC;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.06), 0 2px 8px rgba(0,0,0,0.04);
+}
+
+.status-bar {
+  background: #111111;
+  padding: 12px 18px;
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+}
+.sb-name     { font-size: 16px; font-weight: 700; color: white; flex-shrink: 0; letter-spacing: -0.3px; }
+.sb-center   { text-align: center; flex: 1; }
+.sb-pdf-name { font-size: 11px; color: #888; font-weight: 500; }
+.sb-progress { font-size: 11px; color: #555; margin-top: 2px; font-weight: 500; }
+.sb-right    { text-align: right; flex-shrink: 0; }
+.sb-countdown { display: block; font-size: 18px; font-weight: 700; color: white; font-variant-numeric: tabular-nums; letter-spacing: -0.5px; }
+.sb-window   { font-size: 10px; color: #666; font-weight: 500; margin-top: 2px; }
+.sb-window.ok { color: #4ADE80; }
+
+.pdf-area {
+  background: #FFFFFF;
+  height: 300px;
+  display: flex; align-items: center; justify-content: center;
+  position: relative;
+  border-bottom: 1px solid #EEEEEE;
+}
+.pdf-placeholder {
+  border: 1px solid #E5E5E5;
+  border-radius: 8px;
+  padding: 32px 64px;
+  text-align: center;
+  color: #CCCCCC;
+  font-size: 13px; font-weight: 500;
+}
+.pdf-hint { font-size: 11px; color: #DDDDDD; margin-top: 6px; font-weight: 400; }
+
+.page-num {
+  position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%);
+  font-size: 11px; color: #BBBBBB; font-weight: 500;
+}
+
+.record-zone {
+  background: #F9F9F9;
+  border-top: 1px solid #EEEEEE;
+  padding: 20px;
+  display: flex; justify-content: center; align-items: center;
+}
+.record-btn {
+  width: 80px; height: 80px; border-radius: 50%;
+  background: #111111;
+  border: none;
+  color: white; font-size: 12px; font-weight: 600; font-family: 'Inter', inherit;
+  cursor: pointer; text-align: center; line-height: 1.4;
+  letter-spacing: 0.2px;
+}
+.record-btn:hover { background: #333; }
+
+.bottom-bar {
+  background: #111111;
+  padding: 12px 16px 18px;
+}
+.waveform {
+  display: flex; align-items: center; gap: 2px;
+  height: 48px;
+  background: #1A1A1A;
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+.rec-stats {
+  display: flex; justify-content: space-between;
+  margin-top: 10px;
+  font-size: 11px; color: #555; font-weight: 500;
+}
+.rec-stats .ok { color: #4ADE80; }
+</style>
+</head>
+<body>
+
+<div class="file-header">
+  <h1>Morning Reader</h1>
+  <p>风格预览 · 极简专注风</p>
+</div>
+
+<!-- ══════════════ SECTION 1 ══════════════ -->
+<div class="section-label">区域一：首页</div>
+
+<div class="home-bg">
+  <div class="home-title">Morning Reader</div>
+  <div class="home-date">2026年5月11日 · 星期一</div>
+
+  <div class="cards-row">
+
+    <!-- Mike -->
+    <div class="card">
+      <div class="card-header">
+        <span class="name-mike">Mike</span>
+        <span class="badge">未开始</span>
+      </div>
+      <div class="divider"></div>
+      <div class="info-block">
+        <div class="info-row">
+          <span class="info-label">今日朗读</span>
+          <span class="info-val">3 本</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">打卡时间</span>
+          <span class="info-val">7:00 – 8:00</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">时长要求</span>
+          <span class="info-val">至少 5 分钟</span>
+        </div>
+      </div>
+      <button class="btn btn-mike">开始朗读英文</button>
+    </div>
+
+    <!-- Peyton -->
+    <div class="card">
+      <div class="card-header">
+        <span class="name-peyton">Peyton</span>
+        <span class="badge">未开始</span>
+      </div>
+      <div class="divider"></div>
+      <div class="info-block">
+        <div class="info-row info-row-lg">
+          <span class="info-label">今日朗读</span>
+          <span class="info-val">3 本</span>
+        </div>
+        <div class="info-row info-row-lg">
+          <span class="info-label">打卡时间</span>
+          <span class="info-val">7:00 – 8:00</span>
+        </div>
+        <div class="info-row info-row-lg">
+          <span class="info-label">时长要求</span>
+          <span class="info-val">至少 5 分钟</span>
+        </div>
+      </div>
+      <button class="btn btn-peyton">开始朗读英文</button>
+    </div>
+
+  </div>
+</div>
+
+<!-- ══════════════ SECTION 2 ══════════════ -->
+<div class="section-label">区域二：朗读执行页</div>
+
+<div class="reading-frame">
+  <div class="status-bar">
+    <span class="sb-name">Mike</span>
+    <div class="sb-center">
+      <div class="sb-pdf-name">1-01 At school (无字书)</div>
+      <div class="sb-progress">第 1 本 / 共 3 本</div>
+    </div>
+    <div class="sb-right">
+      <span class="sb-countdown">04:32</span>
+      <div class="sb-window ok">✓ 打卡时间</div>
+    </div>
+  </div>
+
+  <div class="pdf-area">
+    <div class="pdf-placeholder">
+      PDF 内容
+      <div class="pdf-hint">← 点击翻页 →</div>
+    </div>
+    <div class="page-num">第 3 页 / 共 12 页</div>
+  </div>
+
+  <div class="record-zone">
+    <button class="record-btn">开始<br>朗读</button>
+  </div>
+
+  <div class="bottom-bar">
+    <div class="waveform" id="wf"></div>
+    <div class="rec-stats">
+      <span>00:32</span>
+      <span class="ok">声音正常</span>
+      <span>停顿 1 次 · 累计 3 秒</span>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  const h = [12,22,38,58,72,80,68,48,30,18,8,4,7,14,24,48,68,84,78,62,44,28,22,32,48,64,74,68,52,38,28,18,14,9,7,10,18,32,52,68,78,72,58,42,28,18,14,9,7,10,22,42,62,72,68,52,38,22,12,8];
+  const c = document.getElementById('wf');
+  h.forEach(v => {
+    const d = document.createElement('div');
+    d.style.cssText = 'flex:1;border-radius:1px;background:#FFFFFF;opacity:0.4;height:' + v + '%';
+    c.appendChild(d);
+  });
+})();
+</script>
+</body>
+</html>

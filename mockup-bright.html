@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Morning Reader — 童趣明亮风</title>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka+One&family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Nunito', 'PingFang SC', sans-serif;
+  background: #FEF9C3;
+  color: #1E293B;
+  padding: 40px 24px 80px;
+  min-height: 100vh;
+}
+
+/* ── Page header ── */
+.file-header {
+  text-align: center;
+  margin-bottom: 48px;
+}
+.file-header h1 {
+  font-family: 'Fredoka One', sans-serif;
+  font-size: 32px; color: #2563EB;
+  text-shadow: 3px 3px 0 rgba(37,99,235,0.15);
+}
+.file-header p { font-size: 13px; color: #92400E; margin-top: 4px; letter-spacing: 1px; font-weight: 700; }
+
+/* ── Section divider ── */
+.section-label {
+  display: flex; align-items: center; gap: 16px;
+  margin: 52px 0 28px;
+  font-size: 12px; font-weight: 900; letter-spacing: 2px; text-transform: uppercase;
+  color: #92400E;
+}
+.section-label::before, .section-label::after {
+  content: ''; flex: 1; height: 2px;
+  background: linear-gradient(90deg, transparent, #FDE68A, transparent);
+}
+
+/* ═══════════════════════════════════════
+   SECTION 1 — Home
+═══════════════════════════════════════ */
+.home-bg {
+  background: linear-gradient(160deg, #FEF9C3 0%, #FEF3C7 100%);
+  border: 2px solid #FDE68A;
+  border-radius: 28px;
+  padding: 36px 32px;
+  max-width: 720px;
+  margin: 0 auto;
+}
+.home-title {
+  text-align: center;
+  font-family: 'Fredoka One', sans-serif;
+  font-size: 34px; color: #1E293B;
+  margin-bottom: 8px;
+}
+.home-subtitle {
+  text-align: center;
+  font-size: 16px; color: #92400E; font-weight: 700;
+  margin-bottom: 28px;
+}
+.cards-row { display: flex; gap: 20px; }
+
+.card {
+  flex: 1;
+  border-radius: 28px;
+  padding: 24px 22px;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.card-mike   { background: #EFF6FF; border: 2px solid #BFDBFE; }
+.card-peyton { background: #FDF2F8; border: 2px solid #FBCFE8; }
+
+.card-header { display: flex; justify-content: space-between; align-items: flex-start; }
+.name-mike   { font-size: 22px; font-weight: 900; color: #1D4ED8; }
+.name-peyton { font-size: 27px; font-weight: 900; color: #BE185D; }
+.emoji-mike   { font-size: 24px; }
+.emoji-peyton { font-size: 28px; }
+
+.badge-mike   { background: #DBEAFE; color: #1D4ED8; font-size: 11px; font-weight: 800; padding: 4px 10px; border-radius: 100px; }
+.badge-peyton { background: #FCE7F3; color: #BE185D; font-size: 11px; font-weight: 800; padding: 4px 10px; border-radius: 100px; }
+
+.info-row { display: flex; gap: 8px; align-items: center; font-size: 14px; color: #475569; }
+.info-row-lg  { font-size: 17.5px; }
+.info-val { font-weight: 800; color: #1E293B; }
+.bullet-mike   { color: #2563EB; font-size: 16px; }
+.bullet-peyton { color: #EC4899; font-size: 16px; }
+
+.btn {
+  border: none; border-radius: 20px;
+  font-family: 'Nunito', inherit; font-weight: 900; cursor: pointer;
+  letter-spacing: 0.3px; line-height: 1.3;
+  transition: transform 0.1s;
+}
+.btn:active { transform: scale(0.97); }
+.btn-mike   { background: #2563EB; color: white; font-size: 15px; padding: 14px 12px; margin-top: auto; box-shadow: 0 4px 16px rgba(37,99,235,0.35); }
+.btn-peyton { background: #EC4899; color: white; font-size: 19px; padding: 16px 12px; margin-top: auto; box-shadow: 0 4px 16px rgba(236,72,153,0.40); }
+
+/* ═══════════════════════════════════════
+   SECTION 2 — Reading Page
+═══════════════════════════════════════ */
+.reading-frame {
+  max-width: 480px;
+  margin: 0 auto;
+  border-radius: 32px;
+  overflow: hidden;
+  border: 3px solid #FDE68A;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.10), 0 4px 12px rgba(0,0,0,0.06);
+}
+
+.status-bar {
+  background: #2563EB;
+  padding: 14px 18px;
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+}
+.sb-name     { font-size: 20px; font-weight: 900; color: white; flex-shrink: 0; }
+.sb-center   { text-align: center; flex: 1; }
+.sb-pdf-name { font-size: 12px; color: #BFDBFE; font-weight: 700; }
+.sb-progress { font-size: 11px; color: #93C5FD; margin-top: 2px; }
+.sb-right    { text-align: right; flex-shrink: 0; }
+.sb-countdown { display: block; font-size: 20px; font-weight: 900; color: #FEF9C3; font-variant-numeric: tabular-nums; }
+.sb-window   { font-size: 11px; color: #86EFAC; font-weight: 800; margin-top: 2px; }
+
+.pdf-area {
+  background: #FFFBEB;
+  height: 280px;
+  display: flex; align-items: center; justify-content: center;
+  position: relative;
+}
+.pdf-placeholder {
+  border: 3px dashed #FDE68A;
+  border-radius: 16px;
+  padding: 32px 56px;
+  text-align: center;
+  color: #B45309;
+  font-size: 14px; font-weight: 800;
+}
+.pdf-hint { font-size: 12px; color: #D97706; margin-top: 8px; }
+.page-emojis {
+  position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%);
+  display: flex; gap: 6px; font-size: 10px; color: #D97706; font-weight: 700;
+}
+
+.record-zone {
+  background: #FEF9C3;
+  padding: 20px;
+  display: flex; justify-content: center; align-items: center;
+}
+.record-btn {
+  width: 88px; height: 88px; border-radius: 50%;
+  background: linear-gradient(145deg, #EF4444, #DC2626);
+  border: 4px solid white;
+  color: white; font-size: 13px; font-weight: 900; font-family: 'Nunito', inherit;
+  cursor: pointer; text-align: center; line-height: 1.3;
+  box-shadow: 0 6px 24px rgba(239,68,68,0.50), 0 0 0 6px rgba(239,68,68,0.15);
+}
+.mic-icon { font-size: 18px; display: block; margin-bottom: 2px; }
+
+.bottom-bar {
+  background: #1E40AF;
+  padding: 12px 16px 18px;
+}
+.waveform {
+  display: flex; align-items: center; gap: 2px;
+  height: 48px;
+  background: rgba(0,0,0,0.2);
+  border-radius: 12px;
+  padding: 6px 8px;
+}
+.rec-stats {
+  display: flex; justify-content: space-between;
+  margin-top: 10px;
+  font-size: 11px; color: #93C5FD; font-weight: 800;
+}
+.rec-stats .ok { color: #86EFAC; }
+</style>
+</head>
+<body>
+
+<div class="file-header">
+  <h1>☀️ Morning Reader 📚</h1>
+  <p>风格预览 · 童趣明亮风</p>
+</div>
+
+<!-- ══════════════ SECTION 1 ══════════════ -->
+<div class="section-label">区域一：首页</div>
+
+<div class="home-bg">
+  <div class="home-title">Morning Reader ☀️</div>
+  <div class="home-subtitle">每天早读，快乐成长！</div>
+
+  <div class="cards-row">
+
+    <!-- Mike -->
+    <div class="card card-mike">
+      <div class="card-header">
+        <div>
+          <div class="name-mike">Mike 📖</div>
+        </div>
+        <span class="badge-mike">未开始</span>
+      </div>
+      <div class="info-row">
+        <span class="bullet-mike">●</span>
+        <span>今日朗读</span>
+        <span class="info-val">3 本</span>
+      </div>
+      <div class="info-row">
+        <span class="bullet-mike">●</span>
+        <span>打卡时间</span>
+        <span class="info-val">7:00 – 8:00</span>
+      </div>
+      <div class="info-row">
+        <span class="bullet-mike">●</span>
+        <span>时长要求</span>
+        <span class="info-val">至少 5 分钟</span>
+      </div>
+      <button class="btn btn-mike">🎤 开始朗读英文</button>
+    </div>
+
+    <!-- Peyton -->
+    <div class="card card-peyton">
+      <div class="card-header">
+        <div>
+          <div class="name-peyton">Peyton 🌟</div>
+        </div>
+        <span class="badge-peyton">未开始</span>
+      </div>
+      <div class="info-row info-row-lg">
+        <span class="bullet-peyton">●</span>
+        <span>今日朗读</span>
+        <span class="info-val">3 本</span>
+      </div>
+      <div class="info-row info-row-lg">
+        <span class="bullet-peyton">●</span>
+        <span>打卡时间</span>
+        <span class="info-val">7:00 – 8:00</span>
+      </div>
+      <div class="info-row info-row-lg">
+        <span class="bullet-peyton">●</span>
+        <span>时长要求</span>
+        <span class="info-val">至少 5 分钟</span>
+      </div>
+      <button class="btn btn-peyton">🎤 开始朗读英文</button>
+    </div>
+
+  </div>
+</div>
+
+<!-- ══════════════ SECTION 2 ══════════════ -->
+<div class="section-label">区域二：朗读执行页</div>
+
+<div class="reading-frame">
+  <div class="status-bar">
+    <span class="sb-name">Mike 📖</span>
+    <div class="sb-center">
+      <div class="sb-pdf-name">1-01 At school (无字书)</div>
+      <div class="sb-progress">第 1 本 / 共 3 本</div>
+    </div>
+    <div class="sb-right">
+      <span class="sb-countdown">04:32</span>
+      <div class="sb-window">✅ 打卡时间</div>
+    </div>
+  </div>
+
+  <div class="pdf-area">
+    <div class="pdf-placeholder">
+      📄 PDF 内容
+      <div class="pdf-hint">← 左右点击翻页 →</div>
+    </div>
+    <div class="page-emojis">
+      <span>第 1 页 / 共 12 页</span>
+    </div>
+  </div>
+
+  <div class="record-zone">
+    <button class="record-btn">
+      <span class="mic-icon">🎤</span>
+      开始朗读
+    </button>
+  </div>
+
+  <div class="bottom-bar">
+    <div class="waveform" id="wf"></div>
+    <div class="rec-stats">
+      <span>00:32</span>
+      <span class="ok">✅ 声音正常</span>
+      <span>停顿 1 次 · 累计 3 秒</span>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  const h = [12,22,38,58,72,80,68,48,30,18,8,4,7,14,24,48,68,84,78,62,44,28,22,32,48,64,74,68,52,38,28,18,14,9,7,10,18,32,52,68,78,72,58,42,28,18,14,9,7,10,22,42,62,72,68,52,38,22,12,8];
+  const c = document.getElementById('wf');
+  h.forEach(v => {
+    const d = document.createElement('div');
+    d.style.cssText = 'flex:1;border-radius:3px;background:#60A5FA;opacity:0.9;height:' + v + '%';
+    c.appendChild(d);
+  });
+})();
+</script>
+</body>
+</html>

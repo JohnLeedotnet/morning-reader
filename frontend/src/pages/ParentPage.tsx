@@ -1,0 +1,1216 @@
+import { useCallback, useEffect, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
+import { adminFetch, adminRecordingUrl, isAdminAuthed, clearAdminAuth } from '../lib/adminFetch'
+import PdfReviewer from '../components/PdfReviewer'
+
+type View = 'loading' | 'setup' | 'login' | 'dashboard'
+
+interface Session {
+  id: number
+  child_id: string
+  child_name: string
+  date: string
+  start_time: string
+  end_time: string | null
+  total_duration_s: number
+  silence_count: number
+  max_silence_s: number
+  total_silence_s: number
+  pdfs_opened: number
+  pdfs_required: number
+  time_in_window: number
+  status: string
+  recording_path: string | null
+  session_type?: string
+}
+
+interface RecPlan {
+  id: number
+  child_id: string
+  child_name: string
+  pdf_filename: string
+  scheduled_date: string
+  status: string
+}
+
+interface PdfFile  { filename: string; relativePath: string; size: number }
+interface PdfLevel { level: string; files: PdfFile[] }
+
+const REC_STATUS: Record<string, { label: string; cls: string }> = {
+  scheduled: { label: '已安排',       cls: 'bg-blue-100 text-blue-700' },
+  submitted: { label: '已提交·待审核', cls: 'bg-orange-200 text-orange-800' },
+  passed:    { label: '通过',         cls: 'bg-[#D6EAE0] text-[#81B29A]' },
+  retry:     { label: '需重读',       cls: 'bg-orange-100 text-orange-600' },
+}
+
+const STATUS_INFO: Record<string, { label: string; cls: string }> = {
+  started:          { label: '朗读中',   cls: 'bg-blue-100 text-blue-700' },
+  submitted:        { label: '已提交',   cls: 'bg-yellow-100 text-yellow-700' },
+  pending_review:   { label: '待审核',   cls: 'bg-orange-100 text-orange-700' },
+  passed:           { label: '合格 ✓',   cls: 'bg-[#D6EAE0] text-[#81B29A]' },
+  failed:           { label: '不合格',   cls: 'bg-red-100 text-red-600' },
+  redo_required:    { label: '要求重读', cls: 'bg-orange-100 text-orange-600' },
+  time_short:       { label: '时长不足', cls: 'bg-yellow-100 text-yellow-700' },
+  out_of_window:    { label: '超出时段', cls: 'bg-yellow-100 text-yellow-700' },
+  long_pause:       { label: '停顿过长', cls: 'bg-orange-100 text-orange-600' },
+  high_silence:     { label: '静音过多', cls: 'bg-orange-100 text-orange-600' },
+  pdf_insufficient: { label: 'PDF 不足', cls: 'bg-red-100 text-red-600' },
+}
+
+function fmtLocalHHMM(iso: string) {
+  const d = new Date(iso)
+  return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
+}
+
+function fmtDuration(s: number) {
+  const m = Math.floor(s / 60), sec = Math.floor(s % 60)
+  return m > 0 ? `${m}分${sec}秒` : `${sec}秒`
+}
+
+// ── PIN input ─────────────────────────────────────────────────────────────────
+
+function PinInput({ value, onChange, placeholder = '请输入 PIN' }: {
+  value: string; onChange: (v: string) => void; placeholder?: string
+}) {
+  return (
+    <input
+      type="password" inputMode="numeric" maxLength={6} value={value}
+      onChange={e => onChange(e.target.value.replace(/\D/g, ''))}
+      placeholder={placeholder}
+      className="w-full text-center text-2xl tabular-nums tracking-[0.5em] font-extrabold
+        bg-cream text-brown-text rounded-[12px] p-4 border-2 border-transparent
+        focus:border-peach outline-none transition-colors"
+    />
+  )
+}
+
+// ── Session card ──────────────────────────────────────────────────────────────
+
+function SessionCard({ session, expandedAudio, onToggleAudio, onReview, onDelete, checked, onToggleCheck }: {
+  session: Session
+  expandedAudio: number | null
+  onToggleAudio: (id: number) => void
+  onReview: (id: number, decision: string) => void
+  onDelete: (id: number) => void
+  checked: boolean
+  onToggleCheck: (id: number) => void
+}) {
+  const info = STATUS_INFO[session.status]
+  const showAudio = expandedAudio === session.id
+  const isRecitation = session.session_type === 'recitation'
+  const [expanded, setExpanded] = useState(false)
+  const [audioEl, setAudioEl] = useState<HTMLAudioElement | null>(null)
+  const audioCallbackRef = useCallback((el: HTMLAudioElement | null) => setAudioEl(el), [])
+
+  return (
+    <div
+      onClick={() => onToggleCheck(session.id)}
+      className={`rounded-[20px] p-5 cursor-pointer transition-all
+        ${checked
+          ? 'bg-peach/10 border-2 border-peach shadow-[0_4px_24px_rgba(224,122,95,0.25)]'
+          : 'bg-white border-2 border-transparent shadow-[0_4px_24px_rgba(224,122,95,0.08)] hover:border-[#F0D8C8]'}
+        ${isRecitation ? 'border-l-4 border-l-peach-deep' : ''}`}
+    >
+
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          {isRecitation ? (
+            <span className="text-peach-deep text-xs font-extrabold bg-peach/20 px-2 py-1 rounded-full">
+              📚 背诵考核
+            </span>
+          ) : (
+            <span className="text-brown-mute text-xs font-extrabold bg-[#F5E8DD] px-2 py-1 rounded-full">
+              🎤 朗读
+            </span>
+          )}
+          <h3 className="text-lg font-extrabold text-brown-text">{session.child_name}</h3>
+          <span className="text-brown-mute text-[13px]">· {session.date}</span>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <span className={`text-[11px] font-extrabold px-2.5 py-1 rounded-full whitespace-nowrap
+            ${info ? info.cls : 'bg-[#F5E8DD] text-brown-faint'}`}>
+            {info ? info.label : session.status}
+          </span>
+          <button onClick={(e) => { e.stopPropagation(); onDelete(session.id) }}
+            className="bg-red-100 hover:bg-red-200 text-red-700 text-xs font-extrabold px-3 py-1.5 rounded-[10px]">
+            🗑 删除
+          </button>
+        </div>
+      </div>
+
+      {session.end_time && session.start_time && (
+        <p className="text-[13px] text-brown-mute mb-1">
+          {isRecitation ? '背诵' : '朗读'} {fmtLocalHHMM(session.start_time)} — {fmtLocalHHMM(session.end_time)}
+          （{fmtDuration(session.total_duration_s)}）{!isRecitation && `· ${session.pdfs_opened}/${session.pdfs_required} 本`}
+        </p>
+      )}
+      <p className="text-[12px] text-[#9A7060] mb-3">
+        停顿 {session.silence_count} 次 · 累计 {Math.round(session.total_silence_s)}s · 最长 {Math.round(session.max_silence_s)}s
+        {session.time_in_window === 0 && <span className="text-yellow-600 ml-2">· 时间窗外</span>}
+      </p>
+
+      {session.recording_path && (
+        <div className="mb-3">
+          <button onClick={(e) => { e.stopPropagation(); onToggleAudio(session.id) }}
+            className="bg-shell-dark text-white text-[13px] font-extrabold px-4 py-2 rounded-[10px]
+              hover:bg-shell-darker transition-colors">
+            {showAudio ? '▼ 收起录音' : '▶ 回听录音'}
+          </button>
+          {showAudio && (
+            <audio ref={audioCallbackRef} controls src={adminRecordingUrl(session.id)}
+              className="w-full mt-2 rounded-[8px]" />
+          )}
+        </div>
+      )}
+
+      <div className="flex gap-2 flex-wrap">
+        <button onClick={(e) => { e.stopPropagation(); onReview(session.id, 'passed') }}
+          className="bg-mint text-white text-[13px] font-extrabold px-4 py-2 rounded-[10px]
+            hover:opacity-90 transition-opacity">
+          ✓ 通过
+        </button>
+        <button onClick={(e) => { e.stopPropagation(); onReview(session.id, 'redo') }}
+          className="bg-orange-500 text-white text-[13px] font-extrabold px-4 py-2 rounded-[10px]
+            hover:opacity-90 transition-opacity">
+          ↻ 要求重读
+        </button>
+        <button onClick={(e) => { e.stopPropagation(); setExpanded(v => !v) }}
+          className="bg-shell-dark text-white text-[13px] font-extrabold px-4 py-2 rounded-[10px]
+            hover:bg-shell-darker transition-colors">
+          {isRecitation ? '📚' : '📖'} {expanded ? '收起' : '查看朗读内容'}
+        </button>
+      </div>
+
+      {expanded && (
+        <div className="mt-5 border-t border-cream-card pt-5">
+          <PdfReviewer
+            sessionId={session.id}
+            mode={isRecitation ? 'recitation' : 'reading'}
+            audioElement={isRecitation ? null : audioEl}
+          />
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── AddPdfModal ───────────────────────────────────────────────────────────────
+
+function AddPdfModal({ childId, childName, onAdd, onClose }: {
+  childId: string
+  childName: string
+  onAdd: (relativePath: string) => void
+  onClose: () => void
+}) {
+  const [levels, setLevels] = useState<PdfLevel[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  useEffect(() => {
+    setLoading(true); setError('')
+    fetch(`/api/children/${childId}/pdfs/list`)
+      .then(async r => {
+        if (!r.ok) {
+          if (r.status === 504) throw new Error('目录扫描超时（网络盘较慢，请稍后重试或更换路径）')
+          const body = await r.text().catch(() => '')
+          throw new Error(`加载失败 ${r.status} ${body}`)
+        }
+        return r.json()
+      })
+      .then((ls: PdfLevel[]) => setLevels(ls))
+      .catch(e => setError(e.message || '网络错误'))
+      .finally(() => setLoading(false))
+  }, [childId])
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+         onClick={onClose}>
+      <div className="bg-white rounded-[24px] max-w-2xl w-full max-h-[80vh] flex flex-col"
+           onClick={e => e.stopPropagation()}>
+        <div className="px-6 py-4 border-b border-cream-card flex items-center justify-between shrink-0">
+          <h3 className="font-extrabold text-brown-text">为 {childName} 选择起点 PDF</h3>
+          <button onClick={onClose} className="text-brown-mute text-xl hover:text-brown-text leading-none">×</button>
+        </div>
+        <div className="flex-1 overflow-auto p-4">
+          {loading && <p className="text-brown-mute text-sm text-center py-8">加载中...</p>}
+          {!loading && error && <p className="text-red-500 text-sm text-center py-8 whitespace-pre-wrap">{error}</p>}
+          {!loading && !error && levels.length === 0 && (
+            <p className="text-brown-mute text-sm text-center py-8">此目录下没有 PDF 文件</p>
+          )}
+          {levels.map(level => (
+            <details key={level.level} className="mb-2">
+              <summary className="cursor-pointer font-extrabold text-brown-text bg-cream
+                rounded-[10px] px-3 py-2 hover:bg-cream-card list-none flex items-center justify-between">
+                <span>{level.level}</span>
+                <span className="text-brown-faint text-xs font-bold">{level.files.length} 本</span>
+              </summary>
+              <ul className="mt-1 ml-2 space-y-0.5">
+                {level.files.map(f => (
+                  <li key={f.relativePath}>
+                    <button onClick={() => onAdd(f.relativePath)}
+                      className="w-full text-left text-sm text-brown-text hover:bg-cream rounded-[8px] px-3 py-1.5">
+                      {f.filename}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Pool child card ───────────────────────────────────────────────────────────
+
+function PoolChildCard({ childName, pdfDir, cursor, count, minDurationMin, preview, onChangeCursor, onChangeCount, onChangeMinDuration, onChangeDir, onSave, saving }: {
+  childName: string
+  pdfDir: string | null
+  cursor: string | null
+  count: number
+  minDurationMin: string
+  preview: PdfFile[]
+  onChangeCursor: () => void
+  onChangeCount: (n: number) => void
+  onChangeMinDuration: (v: string) => void
+  onChangeDir: () => void
+  onSave: () => void
+  saving: boolean
+}) {
+  const cursorFilename = cursor ? (cursor.split('/').pop() ?? cursor) : null
+  const cursorLevel    = cursor ? (cursor.split('/')[0] ?? '')         : null
+  const effectiveMin   = minDurationMin ? parseInt(minDurationMin) : 5
+
+  return (
+    <div className="bg-white rounded-[20px] p-5 shadow-[0_4px_24px_rgba(224,122,95,0.08)]">
+      <h3 className="text-xl font-extrabold text-brown-text mb-4">{childName}</h3>
+
+      <p className="text-sm font-extrabold text-brown-text mb-1.5">PDF 目录</p>
+      <div className="bg-cream rounded-[10px] px-3 py-2 mb-2 text-xs text-brown-mute font-mono break-all min-h-[32px] flex items-center">
+        {pdfDir || <span className="italic">未配置（使用全局目录）</span>}
+      </div>
+      <button onClick={onChangeDir}
+        className="bg-shell-dark text-white text-xs font-extrabold px-3 py-1.5 rounded-[10px] mb-4
+          hover:opacity-90 transition-opacity">
+        修改目录
+      </button>
+
+      <p className="text-sm font-extrabold text-brown-text mb-1.5">起点 PDF</p>
+      <div className="bg-cream rounded-[10px] p-3 mb-2">
+        {cursor ? (
+          <>
+            <p className="font-extrabold text-brown-text text-sm truncate">{cursorFilename}</p>
+            <p className="text-xs text-brown-mute mt-0.5 truncate">{cursorLevel}</p>
+          </>
+        ) : (
+          <p className="text-brown-mute text-sm">未配置</p>
+        )}
+      </div>
+      <button onClick={onChangeCursor}
+        className="bg-peach text-white text-sm font-extrabold px-3 py-1.5 rounded-[10px] mb-4
+          hover:opacity-90 transition-opacity">
+        更换起点
+      </button>
+
+      <div className="flex items-center gap-3 mb-4">
+        <p className="text-sm font-extrabold text-brown-text">每日朗读本数</p>
+        <input
+          type="number" min={1} max={10} value={count}
+          onChange={e => onChangeCount(Math.min(10, Math.max(1, parseInt(e.target.value) || 1)))}
+          className="w-16 text-center text-lg font-extrabold bg-cream rounded-[10px] p-2
+            border-2 border-transparent focus:border-peach outline-none transition-colors text-brown-text"
+        />
+      </div>
+
+      <div className="flex items-center gap-3 mb-4">
+        <p className="text-sm font-extrabold text-brown-text">朗读时长要求</p>
+        <input
+          type="number" min={1} max={60} value={minDurationMin}
+          onChange={e => onChangeMinDuration(e.target.value)}
+          placeholder="默认 5"
+          className="w-16 text-center text-lg font-extrabold bg-cream rounded-[10px] p-2
+            border-2 border-transparent focus:border-peach outline-none transition-colors text-brown-text"
+        />
+        <p className="text-sm text-brown-mute">分钟（留空使用默认 5 分钟）</p>
+      </div>
+
+      {preview.length > 0 && (
+        <div className="mb-4">
+          <p className="text-sm font-extrabold text-brown-text mb-2">今日朗读顺序：</p>
+          <ol className="space-y-1">
+            {preview.map((p, i) => (
+              <li key={p.relativePath} className="text-sm text-brown-text">
+                <span className="text-brown-mute mr-1">{i + 1}.</span>
+                {p.filename}
+              </li>
+            ))}
+          </ol>
+          <p className="text-xs text-brown-mute mt-2">今日朗读时长要求：{effectiveMin} 分钟</p>
+        </div>
+      )}
+
+      <button onClick={onSave} disabled={saving}
+        className="bg-peach text-white py-2.5 px-5 rounded-[12px] font-extrabold w-full
+          hover:opacity-90 transition-opacity disabled:opacity-40">
+        {saving ? '保存中...' : '保存配置'}
+      </button>
+    </div>
+  )
+}
+
+// ── BrowseDirModal ────────────────────────────────────────────────────────────
+
+interface BrowseEntry { name: string; fullPath: string }
+
+const VIRTUAL_ROOT = '__roots__'
+
+function BrowseDirModal({ onSelect, onClose, adminFetchFn }: {
+  onSelect: (path: string) => void
+  onClose: () => void
+  adminFetchFn: typeof adminFetch
+}) {
+  const [current, setCurrent] = useState(VIRTUAL_ROOT)
+  const [parent,  setParent]  = useState<string | null>(null)
+  const [dirs,    setDirs]    = useState<BrowseEntry[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error,   setError]   = useState('')
+
+  const browse = async (target?: string) => {
+    setLoading(true); setError('')
+    try {
+      const url = target && target !== VIRTUAL_ROOT
+        ? `/api/admin/fs/browse?path=${encodeURIComponent(target)}`
+        : '/api/admin/fs/browse'
+      const res = await adminFetchFn(url)
+      if (res.status === 403) { setError('无权限访问此目录'); return }
+      if (res.status === 404) { setError('路径不存在或不是目录'); return }
+      const data = await res.json()
+      setCurrent(data.path); setParent(data.parent); setDirs(data.dirs)
+    } catch { setError('网络错误') }
+    finally { setLoading(false) }
+  }
+
+  useEffect(() => {
+    // Open at virtual root (let user pick home vs volumes)
+    browse()
+  }, [])
+
+  const isVirtualRoot = current === VIRTUAL_ROOT
+  const currentName = (p: string) =>
+    p === VIRTUAL_ROOT ? '选择起点' : (p.split('/').filter(Boolean).pop() || '/')
+
+  const confirmSelect = () => {
+    if (!isVirtualRoot) onSelect(current)
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+         onClick={onClose}>
+      <div className="bg-white rounded-[24px] max-w-2xl w-full max-h-[80vh] flex flex-col"
+           onClick={e => e.stopPropagation()}>
+        <div className="px-6 py-4 border-b border-[#F5E8DD] flex items-center justify-between shrink-0">
+          <h3 className="font-extrabold text-brown-text">选择 PDF 资源目录</h3>
+          <button onClick={onClose} className="text-brown-mute text-xl hover:text-brown-text leading-none">×</button>
+        </div>
+
+        <div className="px-6 py-3 bg-cream/50 flex items-center gap-3 shrink-0">
+          <button
+            onClick={() => browse(parent ?? undefined)}
+            disabled={!parent || loading}
+            className="text-brown-faint hover:text-peach disabled:opacity-30 text-lg transition-colors font-bold">
+            ↑ 上级
+          </button>
+          <div className="flex-1 text-xs text-brown-mute font-mono break-all">
+            {isVirtualRoot ? <span className="italic">选择起点</span> : current}
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-auto px-3 py-2">
+          {loading && <div className="text-brown-mute text-sm p-4 text-center">加载中...</div>}
+          {error && <div className="text-red-500 text-sm p-4">{error}</div>}
+          {!loading && !error && dirs.length === 0 && (
+            <div className="text-brown-mute text-sm p-4 text-center">此目录下没有子目录</div>
+          )}
+          <ul className="space-y-0.5">
+            {dirs.map(d => (
+              <li key={d.fullPath}>
+                <button onClick={() => browse(d.fullPath)}
+                  className="w-full text-left text-sm text-brown-text hover:bg-cream rounded-[8px] px-3 py-2 flex items-center gap-2">
+                  <span className="shrink-0">{isVirtualRoot ? '' : '📁'}</span>
+                  <span className="truncate">{d.name}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <div className="px-6 py-4 border-t border-[#F5E8DD] flex items-center justify-between shrink-0">
+          <div className="text-xs text-brown-mute">
+            {isVirtualRoot
+              ? '请选择一个起点目录'
+              : <>将选择：<span className="font-extrabold text-brown-text">{currentName(current)}</span></>
+            }
+          </div>
+          <div className="flex gap-2">
+            <button onClick={onClose}
+              className="bg-cream text-brown-mute text-sm font-extrabold px-4 py-2 rounded-[10px]
+                hover:bg-[#F5E8DD] transition-colors">
+              取消
+            </button>
+            <button onClick={confirmSelect} disabled={loading || isVirtualRoot}
+              className="bg-peach text-white text-sm font-extrabold px-5 py-2 rounded-[10px]
+                hover:opacity-90 transition-opacity disabled:opacity-30">
+              ✓ 选定此目录
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Main page ─────────────────────────────────────────────────────────────────
+
+export default function ParentPage() {
+  const navigate = useNavigate()
+
+  // Auth state
+  const [view,        setView]        = useState<View>('loading')
+  const [pin,         setPin]         = useState('')
+  const [confirmPin,  setConfirmPin]  = useState('')
+  const [error,       setError]       = useState('')
+  const [lockSeconds, setLockSeconds] = useState(0)
+
+  // Dashboard state
+  const [tab,          setTab]          = useState<'review' | 'pool' | 'recitation' | 'users'>('review')
+  const [sessions,     setSessions]     = useState<Session[]>([])
+  const [loadingSess,  setLoadingSess]  = useState(false)
+  const [expandedAudio, setExpandedAudio] = useState<number | null>(null)
+
+  // Filter state (Task A)
+  const [filterChild,  setFilterChild]  = useState<string>('all')
+  const [filterType,   setFilterType]   = useState<'all' | 'reading' | 'recitation'>('all')
+  const [filterStatus, setFilterStatus] = useState<'all' | 'pending_review' | 'passed' | 'redo_required' | 'time_short' | 'long_pause'>('all')
+  const [selectedIds,  setSelectedIds]  = useState<Set<number>>(new Set())
+
+  // Pool state
+  const [allChildren,        setAllChildren]        = useState<{id: string; name: string; age?: number; daily_count?: number; min_duration_s?: number | null}[]>([])
+  const [localCursors,       setLocalCursors]       = useState<Record<string, string | null>>({})
+  const [localCounts,        setLocalCounts]        = useState<Record<string, number>>({})
+  const [localMinDurations,  setLocalMinDurations]  = useState<Record<string, string>>({})
+  const [localPdfDirs,       setLocalPdfDirs]       = useState<Record<string, string | null>>({})
+  const [childPdfLevels,     setChildPdfLevels]     = useState<Record<string, PdfLevel[]>>({})
+  const [loadingPool,        setLoadingPool]        = useState(false)
+  const [savingChild,        setSavingChild]        = useState<string | null>(null)
+  const [poolModal,          setPoolModal]          = useState<string | null>(null) // childId
+  const [dirModal,           setDirModal]           = useState<string | null>(null) // childId
+  const [addUserOpen,        setAddUserOpen]        = useState(false)
+  const [newUserName,        setNewUserName]        = useState('')
+  const [newUserAge,         setNewUserAge]         = useState('')
+
+  // Recitation state
+  const [recPlans,      setRecPlans]      = useState<RecPlan[]>([])
+  const [loadingRec,    setLoadingRec]    = useState(false)
+  const [recChildId,    setRecChildId]    = useState('mike')
+  const [recPdf,        setRecPdf]        = useState<string | null>(null)
+  const [recDate,       setRecDate]       = useState('')
+  const [schedulingRec, setSchedulingRec] = useState(false)
+  const [recModal,      setRecModal]      = useState(false)
+
+  // ── Init ─────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    fetch('/api/config').then(r => r.json()).then(cfg => {
+      if (!cfg.hasParentPin)  setView('setup')
+      else if (isAdminAuthed()) setView('dashboard')
+      else                    setView('login')
+    }).catch(() => setView('login'))
+  }, [])
+
+  const refreshSessions = () => {
+    setLoadingSess(true)
+    adminFetch('/api/admin/sessions?limit=50')
+      .then(r => r.json())
+      .then(data => { setSessions(Array.isArray(data) ? data : []); setLoadingSess(false) })
+      .catch(() => setLoadingSess(false))
+  }
+
+  // Load sessions when entering dashboard
+  useEffect(() => {
+    if (view !== 'dashboard') return
+    refreshSessions()
+  }, [view])
+
+  // Load children list at dashboard init
+  useEffect(() => {
+    if (view !== 'dashboard') return
+    fetch('/api/children').then(r => r.json())
+      .then((data: any[]) => setAllChildren(data.map(c => ({ id: c.id, name: c.name, age: c.age, daily_count: c.daily_count, min_duration_s: c.min_duration_s }))))
+      .catch(() => {})
+  }, [view])
+
+  // Load pool configs when on pool tab
+  useEffect(() => {
+    if (view !== 'dashboard' || tab !== 'pool') return
+    refreshChildConfigs()
+  }, [view, tab])
+
+  // Load recitation plans when on recitation tab
+  useEffect(() => {
+    if (view !== 'dashboard' || tab !== 'recitation') return
+    refreshRecPlans()
+  }, [view, tab])
+
+  // Clear selection when filters change
+  useEffect(() => { setSelectedIds(new Set()) }, [filterChild, filterType, filterStatus])
+
+  // Lock countdown
+  useEffect(() => {
+    if (lockSeconds <= 0) return
+    const t = setTimeout(() => setLockSeconds(s => s - 1), 1000)
+    return () => clearTimeout(t)
+  }, [lockSeconds])
+
+  // ── Pool helpers ──────────────────────────────────────────────────────────
+  const refreshChildConfigs = async () => {
+    setLoadingPool(true)
+    try {
+      const results: any[] = await fetch('/api/children').then(r => r.json())
+      setAllChildren(results.map(c => ({ id: c.id, name: c.name, age: c.age, daily_count: c.daily_count, min_duration_s: c.min_duration_s })))
+      const cursors:   Record<string, string | null> = {}
+      const counts:    Record<string, number>        = {}
+      const durations: Record<string, string>        = {}
+      const dirs:      Record<string, string | null> = {}
+      results.forEach(c => {
+        cursors[c.id]   = c.cursor_pdf ?? null
+        counts[c.id]    = c.daily_count ?? 3
+        durations[c.id] = c.min_duration_s != null
+          ? String(Math.round(c.min_duration_s / 60))
+          : ''
+        dirs[c.id] = c.pdf_dir ?? null
+      })
+      setLocalCursors(cursors)
+      setLocalCounts(counts)
+      setLocalMinDurations(durations)
+      setLocalPdfDirs(dirs)
+      // fetch per-child PDF levels for preview
+      const levels: Record<string, PdfLevel[]> = {}
+      await Promise.all(results.map((c: any) =>
+        fetch(`/api/children/${c.id}/pdfs/list`).then(r => r.json())
+          .then((ls: PdfLevel[]) => { levels[c.id] = ls })
+          .catch(() => { levels[c.id] = [] })
+      ))
+      setChildPdfLevels(levels)
+    } finally {
+      setLoadingPool(false)
+    }
+  }
+
+  const handleOpenPoolModal = (childId: string) => {
+    setPoolModal(childId)
+  }
+
+  const handleSelectCursor = (relativePath: string) => {
+    if (!poolModal) return
+    setLocalCursors(prev => ({ ...prev, [poolModal]: relativePath }))
+    setPoolModal(null)
+  }
+
+  const handleSaveConfig = async (childId: string) => {
+    setSavingChild(childId)
+    try {
+      const minDurMin = localMinDurations[childId]
+      const min_duration_s = minDurMin ? parseInt(minDurMin) * 60 : null
+      const res = await adminFetch('/api/admin/pool/configure', {
+        method: 'POST',
+        body: JSON.stringify({
+          child_id: childId,
+          cursor_pdf: localCursors[childId] ?? null,
+          daily_count: localCounts[childId],
+          min_duration_s,
+        }),
+      })
+      if (!res.ok) { alert('保存失败'); return }
+    } finally {
+      setSavingChild(null)
+    }
+  }
+
+  const handleDeleteSession = async (sessionId: number) => {
+    const session = sessions.find(s => s.id === sessionId)
+    if (!session) return
+    if (!confirm(`确认删除这条录音？此操作不可恢复。\n孩子：${session.child_name}\n时间：${session.start_time}`)) return
+    await adminFetch(`/api/admin/sessions/${sessionId}`, { method: 'DELETE' })
+    refreshSessions()
+  }
+
+  const handleBulkDelete = async () => {
+    const ids = Array.from(selectedIds)
+    if (ids.length === 0) return
+    if (!confirm(`确认删除选中的 ${ids.length} 条录音？此操作不可恢复。`)) return
+    await adminFetch('/api/admin/sessions/bulk-delete', {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    })
+    setSelectedIds(new Set())
+    refreshSessions()
+  }
+
+  // ── Recitation helpers ────────────────────────────────────────────────────
+  const refreshRecPlans = async () => {
+    setLoadingRec(true)
+    try {
+      const data = await adminFetch('/api/admin/recitation?upcoming=1').then(r => r.json())
+      setRecPlans(Array.isArray(data) ? data : [])
+    } finally {
+      setLoadingRec(false)
+    }
+  }
+
+  const handleScheduleRecitation = async () => {
+    if (!recChildId || !recPdf || !recDate) { alert('请填写所有字段'); return }
+    setSchedulingRec(true)
+    try {
+      const res = await adminFetch('/api/admin/recitation/schedule', {
+        method: 'POST',
+        body: JSON.stringify({ child_id: recChildId, pdf_filename: recPdf, scheduled_date: recDate }),
+      })
+      if (!res.ok) { alert('安排失败'); return }
+      setRecPdf(null)
+      setRecDate('')
+      await refreshRecPlans()
+    } finally {
+      setSchedulingRec(false)
+    }
+  }
+
+  const handleDeleteRecPlan = async (id: number) => {
+    if (!confirm('确认删除此考核计划？')) return
+    await adminFetch(`/api/admin/recitation/${id}`, { method: 'DELETE' })
+    setRecPlans(prev => prev.filter(p => p.id !== id))
+  }
+
+  const handleOpenRecModal = () => { setRecModal(true) }
+
+  const handleSelectRecPdf = (relativePath: string) => {
+    setRecPdf(relativePath)
+    setRecModal(false)
+  }
+
+  const handleDirSelect = async (childId: string, selectedDir: string) => {
+    const res = await adminFetch('/api/admin/pool/configure', {
+      method: 'POST',
+      body: JSON.stringify({ child_id: childId, pdf_dir: selectedDir }),
+    })
+    if (!res.ok) { alert('保存目录失败'); return }
+    setLocalPdfDirs(prev => ({ ...prev, [childId]: selectedDir }))
+    setDirModal(null)
+    // reload this child's PDF levels for preview
+    fetch(`/api/children/${childId}/pdfs/list`).then(r => r.json())
+      .then((ls: PdfLevel[]) => setChildPdfLevels(prev => ({ ...prev, [childId]: ls })))
+      .catch(() => {})
+  }
+
+  const handleAddUser = async () => {
+    if (!newUserName.trim() || !newUserAge) return
+    const res = await adminFetch('/api/admin/children', {
+      method: 'POST',
+      body: JSON.stringify({ name: newUserName.trim(), age: parseInt(newUserAge) }),
+    })
+    if (!res.ok) { alert('添加失败'); return }
+    setAddUserOpen(false); setNewUserName(''); setNewUserAge('')
+    await refreshChildConfigs()
+  }
+
+  const handleDeleteChild = async (childId: string, childName: string) => {
+    if (!confirm(`确认删除用户 ${childName}？所有录音、记录将一并删除，此操作不可恢复。`)) return
+    const res = await adminFetch(`/api/admin/children/${childId}`, { method: 'DELETE' })
+    if (!res.ok) { alert('删除失败'); return }
+    await refreshChildConfigs()
+  }
+
+  const computePreview = (childId: string): PdfFile[] => {
+    const cursor = localCursors[childId] ?? null
+    const count  = localCounts[childId] ?? 3
+    if (!cursor) return []
+    const flatPdfs = (childPdfLevels[childId] ?? []).flatMap(l => l.files)
+    const idx = flatPdfs.findIndex(p => p.relativePath === cursor)
+    if (idx === -1) return []
+    return flatPdfs.slice(idx, idx + count)
+  }
+
+  // ── Auth handlers ─────────────────────────────────────────────────────────
+  const handleSetup = async () => {
+    if (!/^\d{4,6}$/.test(pin))  { setError('PIN 必须是 4-6 位数字'); return }
+    if (pin !== confirmPin)       { setError('两次输入的 PIN 不一致'); return }
+    setError('')
+    try {
+      const res = await fetch('/api/admin/setup-pin', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin }),
+      })
+      if (res.ok) {
+        sessionStorage.setItem('parent_pin', pin)
+        setPin(''); setConfirmPin('')
+        setView('dashboard')
+      } else {
+        const d = await res.json()
+        setError(d.error || '设置失败')
+      }
+    } catch { setError('网络错误') }
+  }
+
+  const handleLogin = async () => {
+    if (!pin || lockSeconds > 0) return
+    setError('')
+    try {
+      const res = await fetch('/api/admin/verify-pin', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin }),
+      })
+      if (res.ok) {
+        sessionStorage.setItem('parent_pin', pin)
+        setPin(''); setView('dashboard')
+      } else if (res.status === 429) {
+        const d = await res.json()
+        setLockSeconds(d.retryAfter || 60)
+      } else {
+        setError('PIN 错误'); setPin('')
+      }
+    } catch { setError('网络错误') }
+  }
+
+  const handleReview = async (sessionId: number, decision: string) => {
+    try {
+      await adminFetch(`/api/admin/sessions/${sessionId}/review`, {
+        method: 'POST', body: JSON.stringify({ decision }),
+      })
+      setSessions(prev => prev.map(s =>
+        s.id === sessionId ? { ...s, status: decision === 'redo' ? 'redo_required' : decision } : s
+      ))
+    } catch { /* ignore */ }
+  }
+
+  // ── Loading ───────────────────────────────────────────────────────────────
+  if (view === 'loading') return (
+    <div className="min-h-screen bg-cream flex items-center justify-center">
+      <p className="text-brown-mute">加载中...</p>
+    </div>
+  )
+
+  // ── Auth card ─────────────────────────────────────────────────────────────
+  if (view === 'setup' || view === 'login') {
+    const isSetup = view === 'setup'
+    return (
+      <div className="min-h-screen bg-cream flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-white rounded-[24px] p-8
+          shadow-[0_4px_24px_rgba(224,122,95,0.15)]">
+          <h1 className="text-[28px] font-extrabold text-brown-text text-center mb-2">
+            {isSetup ? '设置家长 PIN' : '家长验证'}
+          </h1>
+          <p className="text-brown-mute text-sm text-center mb-8">
+            {isSetup ? '首次使用，请设置 4-6 位数字 PIN' : '请输入家长 PIN 以进入审核面板'}
+          </p>
+          <div className="flex flex-col gap-4">
+            <PinInput value={pin} onChange={setPin}
+              placeholder={isSetup ? 'PIN（4-6 位数字）' : '请输入 PIN'} />
+            {isSetup && (
+              <PinInput value={confirmPin} onChange={setConfirmPin} placeholder="再次输入 PIN 确认" />
+            )}
+            {error && <p className="text-red-500 text-sm text-center">{error}</p>}
+            {lockSeconds > 0 && (
+              <p className="text-orange-500 text-sm text-center font-bold">
+                请稍候 {lockSeconds} 秒后重试
+              </p>
+            )}
+            <button onClick={isSetup ? handleSetup : handleLogin} disabled={lockSeconds > 0}
+              className="bg-peach text-white rounded-[14px] py-3.5 font-extrabold w-full
+                text-[15px] hover:bg-peach-deep transition-colors disabled:opacity-40">
+              {isSetup ? '设置 PIN' : '进入面板'}
+            </button>
+          </div>
+          <div className="mt-6 text-center">
+            <Link to="/" className="text-brown-faint text-sm font-bold hover:text-peach">← 返回首页</Link>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // ── Dashboard ─────────────────────────────────────────────────────────────
+  const pendingCount = sessions.filter(s => s.status === 'pending_review').length
+  const filtered = sessions.filter(s =>
+    (filterChild  === 'all' || s.child_id      === filterChild) &&
+    (filterType   === 'all' || (s.session_type ?? 'reading') === filterType) &&
+    (filterStatus === 'all' || s.status        === filterStatus)
+  )
+  const allSelected = filtered.length > 0 && filtered.every(s => selectedIds.has(s.id))
+  const toggleAll = () => {
+    if (allSelected) setSelectedIds(new Set())
+    else setSelectedIds(new Set(filtered.map(s => s.id)))
+  }
+  const toggleOne = (id: number) => setSelectedIds(prev => {
+    const next = new Set(prev)
+    next.has(id) ? next.delete(id) : next.add(id)
+    return next
+  })
+
+  return (
+    <div className="min-h-screen bg-cream">
+      {/* Top bar */}
+      <div className="bg-shell-dark px-6 py-4 flex justify-between items-center">
+        <span className="text-white font-extrabold text-[18px]">家长面板</span>
+        <button onClick={() => { clearAdminAuth(); navigate('/') }}
+          className="text-[#C09A80] text-sm font-bold hover:text-white transition-colors">
+          退出 →
+        </button>
+      </div>
+
+      <div className="max-w-4xl mx-auto p-6">
+        {/* Tabs */}
+        <div className="flex gap-2 mb-6">
+          <button onClick={() => setTab('review')}
+            className={`px-5 py-2.5 rounded-[12px] font-extrabold text-sm transition-colors flex items-center gap-2
+              ${tab === 'review' ? 'bg-peach text-white' : 'bg-white text-brown-mute hover:bg-cream-card'}`}>
+            待审核录音
+            {pendingCount > 0 && (
+              <span className={`text-[11px] font-extrabold px-1.5 py-0.5 rounded-full
+                ${tab === 'review' ? 'bg-white/30 text-white' : 'bg-peach text-white'}`}>
+                {pendingCount}
+              </span>
+            )}
+          </button>
+          <button onClick={() => setTab('pool')}
+            className={`px-5 py-2.5 rounded-[12px] font-extrabold text-sm transition-colors
+              ${tab === 'pool' ? 'bg-peach text-white' : 'bg-white text-brown-mute hover:bg-cream-card'}`}>
+            书单管理
+          </button>
+          <button onClick={() => setTab('recitation')}
+            className={`px-5 py-2.5 rounded-[12px] font-extrabold text-sm transition-colors
+              ${tab === 'recitation' ? 'bg-peach text-white' : 'bg-white text-brown-mute hover:bg-cream-card'}`}>
+            考核计划
+          </button>
+          <button onClick={() => setTab('users')}
+            className={`px-5 py-2.5 rounded-[12px] font-extrabold text-sm transition-colors
+              ${tab === 'users' ? 'bg-peach text-white' : 'bg-white text-brown-mute hover:bg-cream-card'}`}>
+            用户管理
+          </button>
+        </div>
+
+        {/* ── Review tab ── */}
+        {tab === 'review' && (
+          <div>
+            {/* Filter bar */}
+            <div className="bg-white rounded-[14px] p-4 mb-4 flex flex-wrap items-center gap-4
+              shadow-[0_2px_12px_rgba(224,122,95,0.08)]">
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-brown-mute font-extrabold">孩子</span>
+                {(['all', ...allChildren.map(c => c.id)] as string[]).map(c => (
+                  <button key={c} onClick={() => setFilterChild(c)}
+                    className={`px-3 py-1.5 rounded-[10px] text-xs font-extrabold transition-colors
+                      ${filterChild === c ? 'bg-peach text-white' : 'bg-cream text-brown-mute hover:bg-[#F5E8DD]'}`}>
+                    {c === 'all' ? '全部' : (allChildren.find(ch => ch.id === c)?.name ?? c)}
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-brown-mute font-extrabold">类型</span>
+                {(['all', 'reading', 'recitation'] as const).map(t => (
+                  <button key={t} onClick={() => setFilterType(t)}
+                    className={`px-3 py-1.5 rounded-[10px] text-xs font-extrabold transition-colors
+                      ${filterType === t ? 'bg-peach text-white' : 'bg-cream text-brown-mute hover:bg-[#F5E8DD]'}`}>
+                    {t === 'all' ? '全部' : t === 'reading' ? '🎤 朗读' : '📚 背诵'}
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs text-brown-mute font-extrabold">状态</span>
+                {([
+                  ['all',           '全部'],
+                  ['pending_review','待审核'],
+                  ['passed',        '通过'],
+                  ['redo_required', '需重读'],
+                  ['time_short',    '时长不足'],
+                  ['long_pause',    '停顿过长'],
+                ] as const).map(([s, label]) => (
+                  <button key={s} onClick={() => setFilterStatus(s)}
+                    className={`px-3 py-1.5 rounded-[10px] text-xs font-extrabold transition-colors
+                      ${filterStatus === s ? 'bg-peach text-white' : 'bg-cream text-brown-mute hover:bg-[#F5E8DD]'}`}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Selection bar */}
+            {filtered.length > 0 && (
+              <div className="flex items-center justify-between mb-3 px-1">
+                <button onClick={toggleAll}
+                  className="text-sm font-bold text-brown-mute hover:text-peach transition-colors">
+                  {allSelected ? '☰ 取消全选' : '☰ 全选当前列表'}
+                  {selectedIds.size > 0 && (
+                    <span className="ml-2 text-peach">· 已选 {selectedIds.size} / {filtered.length}</span>
+                  )}
+                </button>
+                <button onClick={handleBulkDelete} disabled={selectedIds.size === 0}
+                  className="bg-red-500 hover:bg-red-600 disabled:opacity-30 disabled:cursor-not-allowed
+                    text-white text-sm font-extrabold px-4 py-2 rounded-[10px] transition-colors">
+                  🗑 批量删除（{selectedIds.size}）
+                </button>
+              </div>
+            )}
+
+            {loadingSess && <p className="text-brown-mute text-sm">加载中...</p>}
+            {!loadingSess && filtered.length === 0 && (
+              <div className="bg-white rounded-[20px] p-8 text-center
+                shadow-[0_4px_24px_rgba(224,122,95,0.10)]">
+                <p className="text-brown-mute">{sessions.length === 0 ? '暂无会话记录' : '没有符合筛选条件的记录'}</p>
+              </div>
+            )}
+            <div className="space-y-3">
+              {filtered.map(session => (
+                <SessionCard key={session.id} session={session}
+                  expandedAudio={expandedAudio}
+                  onToggleAudio={id => setExpandedAudio(prev => prev === id ? null : id)}
+                  onReview={handleReview}
+                  onDelete={handleDeleteSession}
+                  checked={selectedIds.has(session.id)}
+                  onToggleCheck={toggleOne} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ── Pool tab ── */}
+        {tab === 'pool' && (
+          <div className="space-y-6">
+            <h3 className="text-lg font-extrabold text-brown-text">书单设置</h3>
+            {loadingPool ? (
+              <p className="text-brown-mute text-sm">加载中...</p>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {allChildren.map(c => (
+                  <PoolChildCard key={c.id}
+                    childName={c.name}
+                    pdfDir={localPdfDirs[c.id] ?? null}
+                    cursor={localCursors[c.id] ?? null}
+                    count={localCounts[c.id] ?? 3}
+                    minDurationMin={localMinDurations[c.id] ?? ''}
+                    preview={computePreview(c.id)}
+                    onChangeCursor={() => handleOpenPoolModal(c.id)}
+                    onChangeCount={n => setLocalCounts(prev => ({ ...prev, [c.id]: n }))}
+                    onChangeMinDuration={v => setLocalMinDurations(prev => ({ ...prev, [c.id]: v }))}
+                    onChangeDir={() => setDirModal(c.id)}
+                    onSave={() => handleSaveConfig(c.id)}
+                    saving={savingChild === c.id}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Recitation tab ── */}
+        {tab === 'recitation' && (
+          <div>
+            {/* Schedule form */}
+            <div className="bg-white rounded-[20px] p-5 shadow-[0_4px_24px_rgba(224,122,95,0.08)] mb-5">
+              <h3 className="font-extrabold text-brown-text mb-4">安排考核</h3>
+              <div className="flex flex-col gap-3">
+                <div>
+                  <label className="text-sm font-extrabold text-brown-text mb-1.5 block">孩子</label>
+                  <select value={recChildId} onChange={e => setRecChildId(e.target.value)}
+                    className="w-full bg-cream rounded-[10px] px-3 py-2.5 text-brown-text font-extrabold
+                      border-2 border-transparent focus:border-peach outline-none">
+                    {allChildren.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-sm font-extrabold text-brown-text mb-1.5 block">考核 PDF</label>
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 bg-cream rounded-[10px] px-3 py-2.5 min-h-[44px] flex items-center min-w-0">
+                      {recPdf ? (
+                        <span className="text-sm text-brown-text truncate">{recPdf.split('/').pop()}</span>
+                      ) : (
+                        <span className="text-sm text-brown-mute">未选择</span>
+                      )}
+                    </div>
+                    <button onClick={handleOpenRecModal}
+                      className="bg-peach text-white text-sm font-extrabold px-3 py-2.5 rounded-[10px]
+                        hover:opacity-90 transition-opacity shrink-0">
+                      选择 PDF
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <label className="text-sm font-extrabold text-brown-text mb-1.5 block">考核日期</label>
+                  <input type="date" value={recDate} onChange={e => setRecDate(e.target.value)}
+                    min={new Date().toISOString().slice(0, 10)}
+                    className="w-full bg-cream rounded-[10px] px-3 py-2.5 text-brown-text font-extrabold
+                      border-2 border-transparent focus:border-peach outline-none" />
+                </div>
+                <button onClick={handleScheduleRecitation} disabled={schedulingRec}
+                  className="bg-peach text-white py-2.5 px-5 rounded-[12px] font-extrabold w-full
+                    hover:opacity-90 transition-opacity disabled:opacity-40">
+                  {schedulingRec ? '安排中...' : '📅 安排考核'}
+                </button>
+              </div>
+            </div>
+
+            {/* Plans list */}
+            {loadingRec ? (
+              <p className="text-brown-mute text-sm">加载中...</p>
+            ) : recPlans.length === 0 ? (
+              <div className="bg-white rounded-[20px] p-8 text-center shadow-[0_4px_24px_rgba(224,122,95,0.08)]">
+                <p className="text-brown-mute">暂无考核计划</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {recPlans.map(plan => {
+                  const si = REC_STATUS[plan.status] ?? { label: plan.status, cls: 'bg-[#F5E8DD] text-brown-faint' }
+                  return (
+                    <div key={plan.id}
+                      className="bg-white rounded-[20px] p-4 shadow-[0_4px_24px_rgba(224,122,95,0.08)] flex items-center gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1 flex-wrap">
+                          <span className="font-extrabold text-brown-text text-[15px]">{plan.child_name}</span>
+                          <span className="text-brown-mute text-[12px]">· {plan.scheduled_date}</span>
+                          <span className={`text-[11px] font-extrabold px-2 py-0.5 rounded-full ${si.cls}`}>
+                            {si.label}
+                          </span>
+                        </div>
+                        <p className="text-sm text-brown-text truncate">
+                          {plan.pdf_filename.split('/').pop()?.replace('.pdf', '')}
+                        </p>
+                      </div>
+                      <button onClick={() => handleDeleteRecPlan(plan.id)}
+                        className="text-red-400 hover:text-red-600 text-xl leading-none shrink-0 px-1">
+                        ×
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Users tab ── */}
+        {tab === 'users' && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-extrabold text-brown-text">用户管理</h2>
+                <p className="text-sm text-brown-mute mt-0.5">添加、查看、删除朗读用户</p>
+              </div>
+              <button onClick={() => setAddUserOpen(true)}
+                className="bg-peach text-white font-extrabold px-5 py-3 rounded-[14px]
+                  hover:opacity-90 transition-opacity text-sm">
+                + 添加用户
+              </button>
+            </div>
+
+            <div className="bg-white rounded-[20px] shadow-[0_4px_24px_rgba(224,122,95,0.08)]
+              divide-y divide-[#F5E8DD]">
+              {allChildren.map(c => (
+                <div key={c.id} className="flex items-center justify-between p-4">
+                  <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 rounded-full bg-peach/20 flex items-center justify-center
+                         text-peach-deep font-extrabold text-lg shrink-0">
+                      {c.name.charAt(0).toUpperCase()}
+                    </div>
+                    <div>
+                      <div className="font-extrabold text-brown-text">{c.name}</div>
+                      <div className="text-xs text-brown-mute mt-0.5">
+                        {c.age} 岁 · 每日 {c.daily_count ?? 3} 本 ·
+                        时长 {Math.round((c.min_duration_s ?? 300) / 60)} 分钟
+                      </div>
+                    </div>
+                  </div>
+                  <button onClick={() => handleDeleteChild(c.id, c.name)}
+                    className="text-red-400 hover:text-red-600 text-sm font-extrabold
+                      px-3 py-1.5 rounded-[10px] hover:bg-red-50 transition-colors shrink-0">
+                    🗑 删除
+                  </button>
+                </div>
+              ))}
+              {allChildren.length === 0 && (
+                <p className="text-center text-brown-mute py-8 text-sm">
+                  尚未添加用户，点击右上角「+ 添加用户」开始
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+
+      </div>
+
+      {/* Per-child PDF dir modal */}
+      {dirModal && (
+        <BrowseDirModal
+          adminFetchFn={adminFetch}
+          onSelect={selected => handleDirSelect(dirModal, selected)}
+          onClose={() => setDirModal(null)}
+        />
+      )}
+
+      {/* Pool cursor PDF modal */}
+      {poolModal && (
+        <AddPdfModal
+          childId={poolModal}
+          childName={allChildren.find(c => c.id === poolModal)?.name ?? ''}
+          onAdd={handleSelectCursor}
+          onClose={() => setPoolModal(null)}
+        />
+      )}
+
+      {/* Recitation PDF modal */}
+      {recModal && (
+        <AddPdfModal
+          childId={recChildId}
+          childName={allChildren.find(c => c.id === recChildId)?.name ?? ''}
+          onAdd={handleSelectRecPdf}
+          onClose={() => setRecModal(false)}
+        />
+      )}
+
+      {/* 添加用户 modal */}
+      {addUserOpen && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+             onClick={() => setAddUserOpen(false)}>
+          <div className="bg-white rounded-[24px] max-w-sm w-full p-6"
+               onClick={e => e.stopPropagation()}>
+            <h3 className="font-extrabold text-brown-text text-lg mb-4">添加用户</h3>
+            <div className="space-y-3">
+              <div>
+                <label className="text-sm font-extrabold text-brown-text mb-1 block">姓名</label>
+                <input value={newUserName} onChange={e => setNewUserName(e.target.value)}
+                  placeholder="例如：Alex"
+                  className="w-full bg-cream rounded-[10px] px-3 py-2.5 text-brown-text outline-none
+                    border-2 border-transparent focus:border-peach transition-colors" />
+              </div>
+              <div>
+                <label className="text-sm font-extrabold text-brown-text mb-1 block">年龄</label>
+                <input type="number" min={1} max={99} value={newUserAge}
+                  onChange={e => setNewUserAge(e.target.value)} placeholder="例如：8"
+                  className="w-full bg-cream rounded-[10px] px-3 py-2.5 text-brown-text outline-none
+                    border-2 border-transparent focus:border-peach transition-colors" />
+              </div>
+              <div className="flex gap-2 justify-end pt-1">
+                <button onClick={() => { setAddUserOpen(false); setNewUserName(''); setNewUserAge('') }}
+                  className="bg-cream text-brown-mute text-sm font-extrabold px-4 py-2 rounded-[10px]
+                    hover:bg-cream-card transition-colors">
+                  取消
+                </button>
+                <button onClick={handleAddUser}
+                  className="bg-peach text-white text-sm font-extrabold px-4 py-2 rounded-[10px]
+                    hover:opacity-90 transition-opacity">
+                  添加
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}

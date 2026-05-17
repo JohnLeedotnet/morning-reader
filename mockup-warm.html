@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Morning Reader — 温暖晨光风</title>
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Nunito', 'PingFang SC', sans-serif;
+  background: #FFF5EB;
+  color: #3D2B1F;
+  padding: 40px 24px 80px;
+  min-height: 100vh;
+}
+
+/* ── Page header ── */
+.file-header {
+  text-align: center;
+  margin-bottom: 48px;
+}
+.file-header h1 { font-size: 28px; font-weight: 900; color: #E07A5F; }
+.file-header p  { font-size: 13px; color: #B07050; margin-top: 4px; letter-spacing: 1px; }
+
+/* ── Section divider ── */
+.section-label {
+  display: flex; align-items: center; gap: 16px;
+  margin: 52px 0 28px;
+  font-size: 12px; font-weight: 800; letter-spacing: 2.5px; text-transform: uppercase;
+  color: #B07050;
+}
+.section-label::before, .section-label::after {
+  content: ''; flex: 1; height: 1px; background: #E8D4C4;
+}
+
+/* ═══════════════════════════════════════
+   SECTION 1 — Home
+═══════════════════════════════════════ */
+.home-bg {
+  background: #FFF5EB;
+  border: 1px solid #F0DDD0;
+  border-radius: 24px;
+  padding: 36px 32px;
+  max-width: 720px;
+  margin: 0 auto;
+}
+.home-title {
+  text-align: center;
+  font-size: 30px; font-weight: 900; color: #3D2B1F;
+  margin-bottom: 32px;
+  letter-spacing: -0.5px;
+}
+.cards-row {
+  display: flex; gap: 20px;
+}
+.card {
+  flex: 1;
+  background: #FFFFFF;
+  border-radius: 20px;
+  padding: 24px;
+  box-shadow: 0 4px 24px rgba(224,122,95,0.10), 0 1px 4px rgba(224,122,95,0.08);
+  display: flex; flex-direction: column; gap: 14px;
+}
+.card-header {
+  display: flex; justify-content: space-between; align-items: flex-start;
+}
+.name-mike   { font-size: 22px; font-weight: 900; color: #3D2B1F; }
+.name-peyton { font-size: 27px; font-weight: 900; color: #3D2B1F; }
+
+.badge {
+  background: #F5E8DD; color: #B07050;
+  font-size: 11px; font-weight: 800;
+  padding: 4px 10px; border-radius: 100px;
+  white-space: nowrap; margin-top: 4px;
+}
+
+.info-row { display: flex; align-items: center; gap: 8px; color: #7A6055; }
+.info-row span { font-size: 14px; }
+.info-row span:last-child { font-weight: 800; color: #3D2B1F; }
+.info-row-lg span { font-size: 17.5px; }
+
+.dot { width: 6px; height: 6px; border-radius: 50%; background: #81B29A; flex-shrink: 0; }
+
+.btn { width: 100%; border: none; border-radius: 14px; font-family: inherit; font-weight: 800; cursor: pointer; line-height: 1.3; }
+.btn-mike   { background: #E07A5F; color: white; font-size: 15px; padding: 14px; margin-top: auto; }
+.btn-peyton { background: #C54B38; color: white; font-size: 19px; padding: 16px; margin-top: auto; }
+.btn:hover { filter: brightness(1.05); }
+
+/* ═══════════════════════════════════════
+   SECTION 2 — Reading Page
+═══════════════════════════════════════ */
+.reading-frame {
+  max-width: 480px;
+  margin: 0 auto;
+  border-radius: 28px;
+  overflow: hidden;
+  box-shadow: 0 24px 80px rgba(61,43,31,0.22), 0 4px 16px rgba(61,43,31,0.10);
+  border: 1px solid rgba(61,43,31,0.08);
+}
+
+/* Status bar */
+.status-bar {
+  background: #4A3020;
+  padding: 14px 18px;
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 8px;
+}
+.sb-name { font-size: 20px; font-weight: 900; color: #F5E8DD; flex-shrink: 0; }
+.sb-center { text-align: center; flex: 1; }
+.sb-pdf-name { font-size: 12px; color: #C09A80; font-weight: 700; }
+.sb-progress  { font-size: 11px; color: #9A7060; margin-top: 2px; }
+.sb-right { text-align: right; flex-shrink: 0; }
+.sb-countdown { display: block; font-size: 20px; font-weight: 900; color: white; font-variant-numeric: tabular-nums; }
+.sb-window    { font-size: 11px; color: #81B29A; font-weight: 700; margin-top: 2px; }
+
+/* PDF area */
+.pdf-area {
+  background: #FFF8F2;
+  height: 280px;
+  display: flex; align-items: center; justify-content: center;
+  position: relative;
+}
+.pdf-placeholder {
+  border: 2px dashed #E0C8B8;
+  border-radius: 12px;
+  padding: 28px 52px;
+  text-align: center;
+  color: #C0A090;
+  font-size: 14px; font-weight: 700;
+}
+.pdf-hint { font-size: 11px; color: #D4B8A8; margin-top: 6px; font-weight: 600; }
+
+/* Page indicator */
+.page-indicator {
+  display: flex; gap: 4px; align-items: center;
+  position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%);
+}
+.pi-dot { width: 7px; height: 7px; border-radius: 50%; background: #E0C8B8; }
+.pi-dot.active { background: #E07A5F; width: 20px; border-radius: 4px; }
+
+/* Record button area */
+.record-zone {
+  background: #4A3020;
+  padding: 20px;
+  display: flex; justify-content: center; align-items: center;
+}
+.record-btn {
+  width: 84px; height: 84px; border-radius: 50%;
+  background: linear-gradient(145deg, #E07A5F, #C05030);
+  border: 3px solid rgba(255,255,255,0.15);
+  color: white; font-size: 13px; font-weight: 900; font-family: inherit;
+  cursor: pointer; text-align: center; line-height: 1.3;
+  box-shadow: 0 6px 24px rgba(224,122,95,0.55), 0 2px 8px rgba(0,0,0,0.3);
+}
+
+/* Bottom bar */
+.bottom-bar {
+  background: #3A2418;
+  padding: 12px 16px 18px;
+}
+.waveform {
+  display: flex; align-items: center; gap: 2px;
+  height: 48px;
+  background: #4A3020;
+  border-radius: 10px;
+  padding: 6px 8px;
+}
+.rec-stats {
+  display: flex; justify-content: space-between;
+  margin-top: 10px;
+  font-size: 11px; color: #9A7060; font-weight: 700;
+}
+.rec-stats .ok { color: #81B29A; }
+</style>
+</head>
+<body>
+
+<div class="file-header">
+  <h1>Morning Reader</h1>
+  <p>风格预览 · 温暖晨光风</p>
+</div>
+
+<!-- ══════════════ SECTION 1 ══════════════ -->
+<div class="section-label">区域一：首页</div>
+
+<div class="home-bg">
+  <div class="home-title">Morning Reader</div>
+  <div class="cards-row">
+
+    <!-- Mike -->
+    <div class="card">
+      <div class="card-header">
+        <span class="name-mike">Mike</span>
+        <span class="badge">未开始</span>
+      </div>
+      <div class="info-row">
+        <span class="dot"></span>
+        <span>今日朗读</span>
+        <span>3 本</span>
+      </div>
+      <div class="info-row">
+        <span class="dot"></span>
+        <span>打卡时间</span>
+        <span>7:00 – 8:00</span>
+      </div>
+      <div class="info-row">
+        <span class="dot"></span>
+        <span>时长要求</span>
+        <span>至少 5 分钟</span>
+      </div>
+      <button class="btn btn-mike">开始朗读英文</button>
+    </div>
+
+    <!-- Peyton -->
+    <div class="card">
+      <div class="card-header">
+        <span class="name-peyton">Peyton</span>
+        <span class="badge">未开始</span>
+      </div>
+      <div class="info-row info-row-lg">
+        <span class="dot"></span>
+        <span>今日朗读</span>
+        <span>3 本</span>
+      </div>
+      <div class="info-row info-row-lg">
+        <span class="dot"></span>
+        <span>打卡时间</span>
+        <span>7:00 – 8:00</span>
+      </div>
+      <div class="info-row info-row-lg">
+        <span class="dot"></span>
+        <span>时长要求</span>
+        <span>至少 5 分钟</span>
+      </div>
+      <button class="btn btn-peyton">开始朗读英文</button>
+    </div>
+
+  </div>
+</div>
+
+<!-- ══════════════ SECTION 2 ══════════════ -->
+<div class="section-label">区域二：朗读执行页</div>
+
+<div class="reading-frame">
+  <div class="status-bar">
+    <span class="sb-name">Mike</span>
+    <div class="sb-center">
+      <div class="sb-pdf-name">1-01 At school (无字书)</div>
+      <div class="sb-progress">第 1 本 / 共 3 本</div>
+    </div>
+    <div class="sb-right">
+      <span class="sb-countdown">04:32</span>
+      <div class="sb-window">✓ 打卡时间</div>
+    </div>
+  </div>
+
+  <div class="pdf-area">
+    <div class="pdf-placeholder">
+      PDF 内容
+      <div class="pdf-hint">← 点击翻页 →</div>
+    </div>
+    <div class="page-indicator">
+      <div class="pi-dot active"></div>
+      <div class="pi-dot"></div>
+      <div class="pi-dot"></div>
+      <div class="pi-dot"></div>
+    </div>
+  </div>
+
+  <div class="record-zone">
+    <button class="record-btn">开始<br>朗读</button>
+  </div>
+
+  <div class="bottom-bar">
+    <div class="waveform" id="wf"></div>
+    <div class="rec-stats">
+      <span>00:32</span>
+      <span class="ok">声音正常</span>
+      <span>停顿 1 次 · 累计 3 秒</span>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  const h = [12,22,38,58,72,80,68,48,30,18,8,4,7,14,24,48,68,84,78,62,44,28,22,32,48,64,74,68,52,38,28,18,14,9,7,10,18,32,52,68,78,72,58,42,28,18,14,9,7,10,22,42,62,72,68,52,38,22,12,8];
+  const c = document.getElementById('wf');
+  h.forEach(v => {
+    const d = document.createElement('div');
+    d.style.cssText = 'flex:1;border-radius:2px;background:#E07A5F;opacity:0.85;height:' + v + '%';
+    c.appendChild(d);
+  });
+})();
+</script>
+</body>
+</html>

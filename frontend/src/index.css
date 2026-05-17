@@ -1,0 +1,35 @@
+@import "tailwindcss";
+
+@theme {
+  /* ── Warm color palette ── */
+  --color-cream:          #FFF5EB;
+  --color-cream-card:     #F0DDD0;
+  --color-cream-pdf:      #FFF8F2;
+  --color-brown-text:     #3D2B1F;
+  --color-brown-mute:     #7A6055;
+  --color-brown-faint:    #B07050;
+  --color-peach:          #E07A5F;
+  --color-peach-deep:     #C54B38;
+  --color-mint:           #81B29A;
+  --color-shell-dark:     #4A3020;
+  --color-shell-darker:   #3A2418;
+
+  /* ── Typography ── */
+  --font-nunito: 'Nunito', 'PingFang SC', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: 'Nunito', 'PingFang SC', sans-serif;
+  background: #FFF5EB;
+  color: #3D2B1F;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  min-height: 100svh;
+}
