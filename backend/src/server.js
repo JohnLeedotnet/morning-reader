@@ -922,6 +922,32 @@ app.get('/api/admin/pool/preview/:childId', adminAuth, (req, res) => {
   }
 })
 
+// ── Sprint 0C-Hotfix: serve frontend production build ───────────
+const FRONTEND_DIST = path.resolve(__dirname, '../../frontend/dist')
+if (fs.existsSync(FRONTEND_DIST)) {
+  // 1. 静态文件（assets/、sw.js 等）
+  app.use(express.static(FRONTEND_DIST, {
+    maxAge: '1h',
+    setHeaders: (res, filePath) => {
+      // sw.js 不缓存，避免 PWA 更新延迟
+      if (filePath.endsWith('sw.js') || filePath.endsWith('manifest.webmanifest')) {
+        res.setHeader('Cache-Control', 'no-cache')
+      }
+    }
+  }))
+  // 2. SPA fallback：所有非 /api 的 GET 请求返回 index.html
+  app.use((req, res, next) => {
+    if (req.method !== 'GET' && req.method !== 'HEAD') return next()
+    if (req.path.startsWith('/api/')) return next()
+    const indexPath = path.join(FRONTEND_DIST, 'index.html')
+    if (fs.existsSync(indexPath)) return res.status(200).sendFile(indexPath)
+    next()
+  })
+  console.log('[Sprint 0C-Hotfix] Serving frontend dist from', FRONTEND_DIST)
+} else {
+  console.warn('[Sprint 0C-Hotfix] FRONTEND_DIST not found at', FRONTEND_DIST, '— only API will be served')
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 app.listen(PORT, '0.0.0.0', () => {
