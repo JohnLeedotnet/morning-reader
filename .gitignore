@@ -33,3 +33,8 @@ Morning Reader.xcodeproj/xcuserdata/
 .claude/settings.local.json
 *.log
 *.tmp
+
+# Sprint 0A 备份目录与本地配置（环境敏感）
+data.backup-*/
+**/nas.env
+**/cloudflared.env
