@@ -8,7 +8,7 @@ import { useReadingRecorder } from '../hooks/useReadingRecorder'
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl
 
-interface PoolEntry { id: number; child_id: string; pdf_filename: string; sort_order: number }
+interface PoolEntry { id: number; child_id: string; library_id: number; sha256?: string; pdf_filename: string; sort_order?: number }
 interface Child    { id: string; name: string; age: number; font_scale: number; min_duration_s?: number | null }
 interface Config   {
   window_start: string; window_end: string
@@ -201,7 +201,7 @@ export default function ReadingPage() {
     fetch(`/api/sessions/${sessionId}/pdf-opened`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pdf_filename: pool[0].pdf_filename, page_number: 1, is_dual: isDualPage, client_timestamp: new Date().toISOString() }),
+      body: JSON.stringify({ pdf_library_id: pool[0].library_id, pdf_filename: pool[0].pdf_filename, page_number: 1, is_dual: isDualPage, client_timestamp: new Date().toISOString() }),
     }).catch(console.error)
   }, [sessionId]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -209,13 +209,20 @@ export default function ReadingPage() {
   const S = useRef({ pool, pdfIdx, page, numPages, sessionId })
   S.current = { pool, pdfIdx, page, numPages, sessionId }
 
-  const reportPdf = (filename: string, sid: number | null, reachedLast = false, currentPage = 1, isDual = false) => {
-    if (!sid) return
+  const reportPdf = (entry: PoolEntry | undefined, sid: number | null, reachedLast = false, currentPage = 1, isDual = false) => {
+    if (!sid || !entry) return
     const client_timestamp = new Date().toISOString()
     fetch(`/api/sessions/${sid}/pdf-opened`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pdf_filename: filename, reached_last: reachedLast, page_number: currentPage, is_dual: isDual, client_timestamp }),
+      body: JSON.stringify({
+        pdf_library_id: entry.library_id,
+        pdf_filename: entry.pdf_filename,  // 兼容字段
+        reached_last: reachedLast,
+        page_number: currentPage,
+        is_dual: isDual,
+        client_timestamp,
+      }),
     }).catch(console.error)
   }
 
@@ -227,11 +234,11 @@ export default function ReadingPage() {
     if (nextPage <= numPages) {
       setPage(nextPage)
       const lastShown = isDualNow && nextPage > 1 && nextPage + 1 <= numPages ? nextPage + 1 : nextPage
-      reportPdf(pool[pdfIdx]?.pdf_filename, sessionId, numPages > 0 && lastShown === numPages, nextPage, isDualNow)
+      reportPdf(pool[pdfIdx], sessionId, numPages > 0 && lastShown === numPages, nextPage, isDualNow)
     } else if (pdfIdx < pool.length - 1) {
       const next = pdfIdx + 1
       setPdfIdx(next); setPage(1); setNumPages(0)
-      reportPdf(pool[next].pdf_filename, sessionId, false, 1, isDualNow)
+      reportPdf(pool[next], sessionId, false, 1, isDualNow)
     }
   }, [winWidth, childId])
 
@@ -243,7 +250,7 @@ export default function ReadingPage() {
       : Math.max(1, page - 1)
     if (prevPage === page) return
     setPage(prevPage)
-    reportPdf(pool[pdfIdx]?.pdf_filename, sessionId, false, prevPage, isDualNow)
+    reportPdf(pool[pdfIdx], sessionId, false, prevPage, isDualNow)
   }, [winWidth, childId])
 
   // Keyboard
@@ -306,7 +313,7 @@ export default function ReadingPage() {
 
   // ── Other derived values ──────────────────────────────────────────────────
   const currentPdf = pool[pdfIdx]
-  const pdfUrl     = currentPdf ? `/api/children/${childId}/pdfs/file?path=${encodeURIComponent(currentPdf.pdf_filename)}` : null
+  const pdfUrl     = currentPdf ? `/api/library/${currentPdf.library_id}/file` : null
   const inWindow   = config ? (nowHHMM >= config.window_start && nowHHMM < config.window_end) : null
   const minDurS    = child?.min_duration_s != null ? child.min_duration_s : (config ? parseInt(config.min_duration_s) : 300)
   const remainingS = Math.max(0, minDurS - recorder.durationS)
@@ -395,7 +402,7 @@ export default function ReadingPage() {
                 } catch (_) {}
                 if (doc.numPages === 1) {
                   const { pool: p, pdfIdx: pi, sessionId: sid } = S.current
-                  reportPdf(p[pi]?.pdf_filename, sid, true, 1, isDualPage)
+                  reportPdf(p[pi], sid, true, 1, isDualPage)
                 }
               }}
               loading={<div className="text-brown-mute text-sm mt-20">加载 PDF...</div>}

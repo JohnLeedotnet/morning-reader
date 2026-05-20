@@ -122,13 +122,20 @@ function findPdfsFlatFor(dir) {
 function findPdfsFlat() { return findPdfsFlatFor(getPdfDir()) }
 
 function getTodayPool(childId) {
-  const child = db.prepare('SELECT cursor_pdf, daily_count, pdf_dir FROM children WHERE id = ?').get(childId);
-  if (!child || !child.cursor_pdf) return [];
-  const dir = child.pdf_dir || getPdfDir();
-  const allPdfs = findPdfsFlatFor(dir);
-  const cursorIdx = allPdfs.findIndex(p => p.relativePath === child.cursor_pdf);
-  if (cursorIdx === -1) return [];
-  return allPdfs.slice(cursorIdx, cursorIdx + (child.daily_count || 3));
+  const child = db.prepare('SELECT cursor_library_id, daily_count FROM children WHERE id = ?').get(childId);
+  if (!child || !child.cursor_library_id) return [];
+  const dailyCount = child.daily_count || 3;
+  // 按 pdf_library.id 顺序从 cursor 起取 dailyCount 本
+  // Sprint 0B 阶段：所有 children 都属于 account_id=1 + 所有 library 是 is_private=1 self-uploaded，无需跨账号过滤
+  // Phase 1（注册系统）时再加 account_id / is_private 过滤
+  const rows = db.prepare(`
+    SELECT id AS library_id, sha256, filename
+    FROM pdf_library
+    WHERE id >= ?
+    ORDER BY id
+    LIMIT ?
+  `).all(child.cursor_library_id, dailyCount);
+  return rows;
 }
 
 function getConfig() {
@@ -194,7 +201,9 @@ app.get('/api/children/:id/pool', (req, res) => {
     const pool = getTodayPool(childId).map((p, i) => ({
       id: i,
       child_id: childId,
-      pdf_filename: p.relativePath,
+      library_id: p.library_id,        // 新主字段
+      sha256: p.sha256,
+      pdf_filename: p.filename,        // 兼容字段（旧前端逻辑还会用，显示用）
     }));
     res.json(pool);
   } catch (err) {
@@ -231,6 +240,21 @@ app.get('/api/children/:id/pdfs/list', (req, res) => {
     res.json(result)
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
+
+// Sprint 0B: 用 pdf_library.id 取本地 data/pdfs/ 下的 PDF，不再走 NAS
+app.get('/api/library/:id/file', (req, res) => {
+  try {
+    const lib = db.prepare('SELECT sha256, filename FROM pdf_library WHERE id = ?').get(req.params.id);
+    if (!lib) return res.status(404).json({ error: 'not found' });
+    const filePath = path.join(__dirname, '../../data/pdfs', lib.sha256.slice(0, 2), lib.sha256 + '.pdf');
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'file missing on disk', sha256: lib.sha256 });
+    }
+    res.sendFile(filePath);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 app.get('/api/children/:id/pdfs/file', (req, res) => {
   try {
@@ -354,31 +378,38 @@ app.post('/api/sessions/start', (req, res) => {
 app.post('/api/sessions/:id/pdf-opened', (req, res) => {
   try {
     const sessionId = parseInt(req.params.id);
-    const { pdf_filename, reached_last, page_number, is_dual, client_timestamp } = req.body;
-    if (!pdf_filename) return res.status(400).json({ error: 'pdf_filename required' });
+    const { pdf_library_id, pdf_filename, reached_last, page_number, is_dual, client_timestamp } = req.body;
+    if (!pdf_library_id && !pdf_filename) return res.status(400).json({ error: 'pdf_library_id or pdf_filename required' });
+
+    // 优先用 library_id 解析 filename（保证一致性）
+    let resolvedFilename = pdf_filename;
+    let resolvedLibId = pdf_library_id || null;
+    if (resolvedLibId) {
+      const lib = db.prepare('SELECT filename FROM pdf_library WHERE id = ?').get(resolvedLibId);
+      if (lib) resolvedFilename = lib.filename;
+    }
+    if (!resolvedFilename) return res.status(400).json({ error: 'cannot resolve filename' });
+
     const eventTimestamp = client_timestamp || new Date().toISOString();
     const existing = db.prepare(
       'SELECT 1 FROM pdf_reads WHERE session_id = ? AND pdf_filename = ?'
-    ).get(sessionId, pdf_filename);
+    ).get(sessionId, resolvedFilename);
     if (existing) {
       db.prepare(
         'UPDATE pdf_reads SET last_page_turn_at = ?, pages_turned = pages_turned + 1 WHERE session_id = ? AND pdf_filename = ?'
-      ).run(eventTimestamp, sessionId, pdf_filename);
+      ).run(eventTimestamp, sessionId, resolvedFilename);
     } else {
       db.prepare(
-        'INSERT INTO pdf_reads (session_id, pdf_filename, opened_at, last_page_turn_at, pages_turned) VALUES (?, ?, ?, ?, 1)'
-      ).run(sessionId, pdf_filename, eventTimestamp, eventTimestamp);
+        'INSERT INTO pdf_reads (session_id, pdf_filename, pdf_library_id, opened_at, last_page_turn_at, pages_turned) VALUES (?, ?, ?, ?, ?, 1)'
+      ).run(sessionId, resolvedFilename, resolvedLibId, eventTimestamp, eventTimestamp);
     }
-    if (reached_last === true) {
-      db.prepare(
-        'UPDATE pdf_reads SET completed = 1 WHERE session_id = ? AND pdf_filename = ?'
-      ).run(sessionId, pdf_filename);
+    if (reached_last) {
+      db.prepare('UPDATE pdf_reads SET completed = 1 WHERE session_id = ? AND pdf_filename = ?').run(sessionId, resolvedFilename);
     }
-    if (typeof page_number === 'number') {
-      db.prepare(
-        'INSERT INTO pdf_page_events (session_id, pdf_filename, page_number, timestamp, is_dual) VALUES (?, ?, ?, ?, ?)'
-      ).run(sessionId, pdf_filename, page_number, eventTimestamp, is_dual ? 1 : 0);
-    }
+    db.prepare(`
+      INSERT INTO pdf_page_events (session_id, pdf_filename, page_number, timestamp, is_dual)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(sessionId, resolvedFilename, page_number || 1, eventTimestamp, is_dual ? 1 : 0);
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -632,15 +663,14 @@ app.post('/api/admin/sessions/:id/review', adminAuth, (req, res) => {
         db.prepare("UPDATE recitation_plans SET status = 'passed' WHERE id = ?").run(sessionBefore.plan_id)
         const plan = db.prepare('SELECT * FROM recitation_plans WHERE id = ?').get(sessionBefore.plan_id)
         if (plan) {
-          const child = db.prepare('SELECT cursor_pdf, pdf_dir FROM children WHERE id = ?').get(session.child_id)
-          if (child && child.cursor_pdf === plan.pdf_filename) {
-            const dir = child.pdf_dir || getPdfDir()
-            const allPdfs = findPdfsFlatFor(dir)
-            const idx = allPdfs.findIndex(p => p.relativePath === plan.pdf_filename)
-            if (idx >= 0 && idx + 1 < allPdfs.length) {
-              db.prepare('UPDATE children SET cursor_pdf = ? WHERE id = ?')
-                .run(allPdfs[idx + 1].relativePath, session.child_id)
-              _pdfCacheByDir.clear()
+          // Sprint 0B: cursor 自动前进用 pdf_library.id 顺序，不再扫 NAS
+          const childRow = db.prepare('SELECT cursor_library_id, pdf_dir FROM children WHERE id = ?').get(session.child_id)
+          if (childRow && childRow.cursor_library_id) {
+            const next = db.prepare('SELECT id, filename FROM pdf_library WHERE id > ? ORDER BY id LIMIT 1').get(childRow.cursor_library_id)
+            if (next) {
+              db.prepare('UPDATE children SET cursor_library_id = ?, cursor_pdf = ? WHERE id = ?')
+                .run(next.id, next.filename, session.child_id)
+              console.log(`[Sprint 0B] cursor advanced child=${session.child_id} → library_id=${next.id} (${next.filename})`)
             }
           }
         }
