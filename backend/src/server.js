@@ -2,6 +2,8 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const http = require('http');
+const https = require('https');
 const multer = require('multer');
 
 const db = require('./db');
@@ -948,10 +950,37 @@ if (fs.existsSync(FRONTEND_DIST)) {
   console.warn('[Sprint 0C-Hotfix] FRONTEND_DIST not found at', FRONTEND_DIST, '— only API will be served')
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Sprint Hotfix 4: 双 server（HTTP for Cloudflare Tunnel + HTTPS for 局域网）──
+const HTTP_PORT  = parseInt(process.env.PORT || '3001', 10)
+const HTTPS_PORT = parseInt(process.env.HTTPS_PORT || '5173', 10)
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Morning Reader backend running`);
-  console.log(`  Local:   http://localhost:${PORT}`);
-  console.log(`  Network: http://${require('os').hostname()}:${PORT}`);
-});
+// 1. HTTP server（公网走 Cloudflare Tunnel → http://localhost:3001）
+http.createServer(app).listen(HTTP_PORT, () => {
+  console.log(`Morning Reader backend HTTP listening :${HTTP_PORT}`)
+})
+
+// 2. HTTPS server（局域网用 mkcert 证书，替代 Vite dev）
+try {
+  const certPath = path.resolve(__dirname, '../../frontend/certs/localhost+3.pem')
+  const keyPath  = path.resolve(__dirname, '../../frontend/certs/localhost+3-key.pem')
+  if (fs.existsSync(certPath) && fs.existsSync(keyPath)) {
+    const httpsServer = https.createServer({
+      cert: fs.readFileSync(certPath),
+      key:  fs.readFileSync(keyPath),
+    }, app)
+    httpsServer.on('error', err => {
+      if (err.code === 'EADDRINUSE') {
+        console.warn(`[Hotfix 4] HTTPS :${HTTPS_PORT} already in use (Vite still running?). HTTPS server skipped. HTTP is still up.`)
+      } else {
+        console.error('[Hotfix 4] HTTPS server error:', err.message)
+      }
+    })
+    httpsServer.listen(HTTPS_PORT, () => {
+      console.log(`Morning Reader backend HTTPS listening :${HTTPS_PORT} (mkcert)`)
+    })
+  } else {
+    console.warn(`[Hotfix 4] mkcert certs not found, only HTTP :${HTTP_PORT} will be served`)
+  }
+} catch (e) {
+  console.error('[Hotfix 4] Failed to start HTTPS:', e.message)
+}
