@@ -9,6 +9,7 @@ pdfjs.GlobalWorkerOptions.workerSrc = workerUrl
 
 interface PdfRead {
   pdf_filename: string
+  pdf_library_id?: number | null
   pages_turned: number
   completed: number
 }
@@ -214,6 +215,15 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
     return <p className="text-brown-mute text-sm text-center py-4">无 PDF 阅读记录</p>
   }
 
+  // Sprint 0B Hotfix: 优先用 library_id 走 /api/library，老 session fallback 旧路径
+  const activeLibId = activePdf
+    ? pdfReads.find(r => r.pdf_filename === activePdf)?.pdf_library_id ?? null
+    : null
+  const pdfFileUrl = !activePdf ? null
+    : activeLibId ? `/api/library/${activeLibId}/file`
+    : childId ? `/api/children/${childId}/pdfs/file?path=${encodeURIComponent(activePdf)}`
+    : `/api/pdfs/file?path=${encodeURIComponent(activePdf)}`
+
   return (
     <div className="flex flex-col gap-3">
       {mode === 'reading' && (
@@ -270,9 +280,9 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
       <div ref={containerRef}
            className="bg-cream-pdf rounded-[14px] overflow-hidden flex items-center justify-center p-2"
            onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
-        {activePdf && (
+        {pdfFileUrl && (
           <Document
-            file={childId ? `/api/children/${childId}/pdfs/file?path=${encodeURIComponent(activePdf)}` : `/api/pdfs/file?path=${encodeURIComponent(activePdf)}`}
+            file={pdfFileUrl}
             onLoadSuccess={async (doc) => {
               setNumPages(doc.numPages)
               try {
