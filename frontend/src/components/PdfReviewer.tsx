@@ -84,8 +84,10 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
         setRecordingStartTime(data.recording_start_time || data.start_time || null)
         if (mode === 'recitation') {
           const filename = data.recitation_pdf ?? null
+          const libId = data.recitation_library_id ?? null
           if (filename) {
-            setPdfReads([{ pdf_filename: filename, pages_turned: 0, completed: 0 }])
+            // Hotfix 6: 注入 library_id，让 activeLibId 派生逻辑能命中 → 走 /api/library/:id/file
+            setPdfReads([{ pdf_filename: filename, pdf_library_id: libId, pages_turned: 0, completed: 0 }])
             setActivePdf(filename)
           }
           setPageEvents([])

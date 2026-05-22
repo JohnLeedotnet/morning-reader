@@ -380,11 +380,18 @@ app.get('/api/admin/sessions/:id', adminAuth, (req, res) => {
       'SELECT pdf_filename, page_number, timestamp, is_dual FROM pdf_page_events WHERE session_id = ? ORDER BY timestamp ASC'
     ).all(sessionId)
     let recitation_pdf = null
+    let recitation_library_id = null
     if (session.session_type === 'recitation' && session.plan_id) {
       const plan = db.prepare('SELECT pdf_filename FROM recitation_plans WHERE id = ?').get(session.plan_id)
-      recitation_pdf = plan?.pdf_filename ?? null
+      if (plan?.pdf_filename) {
+        // Hotfix 6: recitation_plans.pdf_filename 可能带路径前缀，取 basename 与 pdf_library.filename 匹配
+        const basename = plan.pdf_filename.split('/').pop() || plan.pdf_filename
+        recitation_pdf = basename
+        const lib = db.prepare('SELECT id FROM pdf_library WHERE filename = ? LIMIT 1').get(basename)
+        recitation_library_id = lib?.id ?? null
+      }
     }
-    res.json({ ...session, pdf_reads: pdfReads, page_events: pageEvents, recitation_pdf })
+    res.json({ ...session, pdf_reads: pdfReads, page_events: pageEvents, recitation_pdf, recitation_library_id })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
