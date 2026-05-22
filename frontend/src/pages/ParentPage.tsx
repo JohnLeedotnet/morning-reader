@@ -33,8 +33,15 @@ interface RecPlan {
   status: string
 }
 
-interface PdfFile  { filename: string; relativePath: string; size: number }
-interface PdfLevel { level: string; files: PdfFile[] }
+interface LibraryItem {
+  id: number
+  sha256: string
+  filename: string
+  title?: string
+  size_bytes?: number
+  is_private: number
+  is_builtin: number
+}
 
 const REC_STATUS: Record<string, { label: string; cls: string }> = {
   scheduled: { label: '已安排',       cls: 'bg-blue-100 text-blue-700' },
@@ -196,30 +203,30 @@ function SessionCard({ session, expandedAudio, onToggleAudio, onReview, onDelete
 
 // ── AddPdfModal ───────────────────────────────────────────────────────────────
 
-function AddPdfModal({ childId, childName, onAdd, onClose }: {
-  childId: string
+function AddPdfModal({ childName, onAdd, onClose }: {
   childName: string
-  onAdd: (relativePath: string) => void
+  onAdd: (libraryId: number, filename: string) => void
   onClose: () => void
 }) {
-  const [levels, setLevels] = useState<PdfLevel[]>([])
+  const [items, setItems] = useState<LibraryItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [query, setQuery] = useState('')
+
   useEffect(() => {
     setLoading(true); setError('')
-    fetch(`/api/children/${childId}/pdfs/list`)
+    const url = query.trim()
+      ? `/api/library/list?q=${encodeURIComponent(query.trim())}`
+      : `/api/library/list`
+    fetch(url)
       .then(async r => {
-        if (!r.ok) {
-          if (r.status === 504) throw new Error('目录扫描超时（网络盘较慢，请稍后重试或更换路径）')
-          const body = await r.text().catch(() => '')
-          throw new Error(`加载失败 ${r.status} ${body}`)
-        }
+        if (!r.ok) throw new Error(`加载失败 ${r.status}`)
         return r.json()
       })
-      .then((ls: PdfLevel[]) => setLevels(ls))
+      .then((data: { items: LibraryItem[]; total: number }) => setItems(data.items))
       .catch(e => setError(e.message || '网络错误'))
       .finally(() => setLoading(false))
-  }, [childId])
+  }, [query])
 
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
@@ -230,31 +237,35 @@ function AddPdfModal({ childId, childName, onAdd, onClose }: {
           <h3 className="font-extrabold text-brown-text">为 {childName} 选择起点 PDF</h3>
           <button onClick={onClose} className="text-brown-mute text-xl hover:text-brown-text leading-none">×</button>
         </div>
-        <div className="flex-1 overflow-auto p-4">
+        <div className="px-6 py-3 shrink-0">
+          <input
+            type="text"
+            placeholder="搜索文件名..."
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            className="w-full bg-cream rounded-[10px] px-3 py-2 text-sm text-brown-text
+              border-2 border-transparent focus:border-peach outline-none transition-colors"
+          />
+          <p className="text-[11px] text-brown-mute mt-1">公共图书馆共 {items.length} 本{query ? '（搜索结果）' : ''}</p>
+        </div>
+        <div className="flex-1 overflow-auto px-3 pb-3">
           {loading && <p className="text-brown-mute text-sm text-center py-8">加载中...</p>}
-          {!loading && error && <p className="text-red-500 text-sm text-center py-8 whitespace-pre-wrap">{error}</p>}
-          {!loading && !error && levels.length === 0 && (
-            <p className="text-brown-mute text-sm text-center py-8">此目录下没有 PDF 文件</p>
+          {!loading && error && <p className="text-red-500 text-sm text-center py-8">{error}</p>}
+          {!loading && !error && items.length === 0 && (
+            <p className="text-brown-mute text-sm text-center py-8">没有匹配的 PDF</p>
           )}
-          {levels.map(level => (
-            <details key={level.level} className="mb-2">
-              <summary className="cursor-pointer font-extrabold text-brown-text bg-cream
-                rounded-[10px] px-3 py-2 hover:bg-cream-card list-none flex items-center justify-between">
-                <span>{level.level}</span>
-                <span className="text-brown-faint text-xs font-bold">{level.files.length} 本</span>
-              </summary>
-              <ul className="mt-1 ml-2 space-y-0.5">
-                {level.files.map(f => (
-                  <li key={f.relativePath}>
-                    <button onClick={() => onAdd(f.relativePath)}
-                      className="w-full text-left text-sm text-brown-text hover:bg-cream rounded-[8px] px-3 py-1.5">
-                      {f.filename}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </details>
-          ))}
+          <ul className="space-y-0.5">
+            {items.map(item => (
+              <li key={item.id}>
+                <button onClick={() => onAdd(item.id, item.filename)}
+                  className="w-full text-left text-sm text-brown-text hover:bg-cream rounded-[8px] px-3 py-2 flex items-center gap-2">
+                  <span className="shrink-0 text-brown-faint text-[11px] w-12 tabular-nums">#{item.id}</span>
+                  <span className="truncate flex-1">{item.filename}</span>
+                  {item.is_private ? <span className="shrink-0 text-[10px] text-brown-faint">🔒</span> : null}
+                </button>
+              </li>
+            ))}
+          </ul>
         </div>
       </div>
     </div>
@@ -263,44 +274,30 @@ function AddPdfModal({ childId, childName, onAdd, onClose }: {
 
 // ── Pool child card ───────────────────────────────────────────────────────────
 
-function PoolChildCard({ childName, pdfDir, cursor, count, minDurationMin, preview, onChangeCursor, onChangeCount, onChangeMinDuration, onChangeDir, onSave, saving }: {
+function PoolChildCard({ childName, cursor, cursorFilename, count, minDurationMin, onChangeCursor, onChangeCount, onChangeMinDuration, onSave, saving }: {
   childName: string
-  pdfDir: string | null
-  cursor: string | null
+  cursor: number | null
+  cursorFilename: string | null
   count: number
   minDurationMin: string
-  preview: PdfFile[]
   onChangeCursor: () => void
   onChangeCount: (n: number) => void
   onChangeMinDuration: (v: string) => void
-  onChangeDir: () => void
   onSave: () => void
   saving: boolean
 }) {
-  const cursorFilename = cursor ? (cursor.split('/').pop() ?? cursor) : null
-  const cursorLevel    = cursor ? (cursor.split('/')[0] ?? '')         : null
-  const effectiveMin   = minDurationMin ? parseInt(minDurationMin) : 5
+  const effectiveMin = minDurationMin ? parseInt(minDurationMin) : 5
 
   return (
     <div className="bg-white rounded-[20px] p-5 shadow-[0_4px_24px_rgba(224,122,95,0.08)]">
       <h3 className="text-xl font-extrabold text-brown-text mb-4">{childName}</h3>
 
-      <p className="text-sm font-extrabold text-brown-text mb-1.5">PDF 目录</p>
-      <div className="bg-cream rounded-[10px] px-3 py-2 mb-2 text-xs text-brown-mute font-mono break-all min-h-[32px] flex items-center">
-        {pdfDir || <span className="italic">未配置（使用全局目录）</span>}
-      </div>
-      <button onClick={onChangeDir}
-        className="bg-shell-dark text-white text-xs font-extrabold px-3 py-1.5 rounded-[10px] mb-4
-          hover:opacity-90 transition-opacity">
-        修改目录
-      </button>
-
       <p className="text-sm font-extrabold text-brown-text mb-1.5">起点 PDF</p>
       <div className="bg-cream rounded-[10px] p-3 mb-2">
-        {cursor ? (
+        {cursor && cursorFilename ? (
           <>
             <p className="font-extrabold text-brown-text text-sm truncate">{cursorFilename}</p>
-            <p className="text-xs text-brown-mute mt-0.5 truncate">{cursorLevel}</p>
+            <p className="text-xs text-brown-mute mt-0.5">library_id={cursor}</p>
           </>
         ) : (
           <p className="text-brown-mute text-sm">未配置</p>
@@ -331,140 +328,14 @@ function PoolChildCard({ childName, pdfDir, cursor, count, minDurationMin, previ
           className="w-16 text-center text-lg font-extrabold bg-cream rounded-[10px] p-2
             border-2 border-transparent focus:border-peach outline-none transition-colors text-brown-text"
         />
-        <p className="text-sm text-brown-mute">分钟（留空使用默认 5 分钟）</p>
+        <p className="text-sm text-brown-mute">分钟（留空使用默认 {effectiveMin} 分钟）</p>
       </div>
-
-      {preview.length > 0 && (
-        <div className="mb-4">
-          <p className="text-sm font-extrabold text-brown-text mb-2">今日朗读顺序：</p>
-          <ol className="space-y-1">
-            {preview.map((p, i) => (
-              <li key={p.relativePath} className="text-sm text-brown-text">
-                <span className="text-brown-mute mr-1">{i + 1}.</span>
-                {p.filename}
-              </li>
-            ))}
-          </ol>
-          <p className="text-xs text-brown-mute mt-2">今日朗读时长要求：{effectiveMin} 分钟</p>
-        </div>
-      )}
 
       <button onClick={onSave} disabled={saving}
         className="bg-peach text-white py-2.5 px-5 rounded-[12px] font-extrabold w-full
           hover:opacity-90 transition-opacity disabled:opacity-40">
         {saving ? '保存中...' : '保存配置'}
       </button>
-    </div>
-  )
-}
-
-// ── BrowseDirModal ────────────────────────────────────────────────────────────
-
-interface BrowseEntry { name: string; fullPath: string }
-
-const VIRTUAL_ROOT = '__roots__'
-
-function BrowseDirModal({ onSelect, onClose, adminFetchFn }: {
-  onSelect: (path: string) => void
-  onClose: () => void
-  adminFetchFn: typeof adminFetch
-}) {
-  const [current, setCurrent] = useState(VIRTUAL_ROOT)
-  const [parent,  setParent]  = useState<string | null>(null)
-  const [dirs,    setDirs]    = useState<BrowseEntry[]>([])
-  const [loading, setLoading] = useState(false)
-  const [error,   setError]   = useState('')
-
-  const browse = async (target?: string) => {
-    setLoading(true); setError('')
-    try {
-      const url = target && target !== VIRTUAL_ROOT
-        ? `/api/admin/fs/browse?path=${encodeURIComponent(target)}`
-        : '/api/admin/fs/browse'
-      const res = await adminFetchFn(url)
-      if (res.status === 403) { setError('无权限访问此目录'); return }
-      if (res.status === 404) { setError('路径不存在或不是目录'); return }
-      const data = await res.json()
-      setCurrent(data.path); setParent(data.parent); setDirs(data.dirs)
-    } catch { setError('网络错误') }
-    finally { setLoading(false) }
-  }
-
-  useEffect(() => {
-    // Open at virtual root (let user pick home vs volumes)
-    browse()
-  }, [])
-
-  const isVirtualRoot = current === VIRTUAL_ROOT
-  const currentName = (p: string) =>
-    p === VIRTUAL_ROOT ? '选择起点' : (p.split('/').filter(Boolean).pop() || '/')
-
-  const confirmSelect = () => {
-    if (!isVirtualRoot) onSelect(current)
-  }
-
-  return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
-         onClick={onClose}>
-      <div className="bg-white rounded-[24px] max-w-2xl w-full max-h-[80vh] flex flex-col"
-           onClick={e => e.stopPropagation()}>
-        <div className="px-6 py-4 border-b border-[#F5E8DD] flex items-center justify-between shrink-0">
-          <h3 className="font-extrabold text-brown-text">选择 PDF 资源目录</h3>
-          <button onClick={onClose} className="text-brown-mute text-xl hover:text-brown-text leading-none">×</button>
-        </div>
-
-        <div className="px-6 py-3 bg-cream/50 flex items-center gap-3 shrink-0">
-          <button
-            onClick={() => browse(parent ?? undefined)}
-            disabled={!parent || loading}
-            className="text-brown-faint hover:text-peach disabled:opacity-30 text-lg transition-colors font-bold">
-            ↑ 上级
-          </button>
-          <div className="flex-1 text-xs text-brown-mute font-mono break-all">
-            {isVirtualRoot ? <span className="italic">选择起点</span> : current}
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-auto px-3 py-2">
-          {loading && <div className="text-brown-mute text-sm p-4 text-center">加载中...</div>}
-          {error && <div className="text-red-500 text-sm p-4">{error}</div>}
-          {!loading && !error && dirs.length === 0 && (
-            <div className="text-brown-mute text-sm p-4 text-center">此目录下没有子目录</div>
-          )}
-          <ul className="space-y-0.5">
-            {dirs.map(d => (
-              <li key={d.fullPath}>
-                <button onClick={() => browse(d.fullPath)}
-                  className="w-full text-left text-sm text-brown-text hover:bg-cream rounded-[8px] px-3 py-2 flex items-center gap-2">
-                  <span className="shrink-0">{isVirtualRoot ? '' : '📁'}</span>
-                  <span className="truncate">{d.name}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-
-        <div className="px-6 py-4 border-t border-[#F5E8DD] flex items-center justify-between shrink-0">
-          <div className="text-xs text-brown-mute">
-            {isVirtualRoot
-              ? '请选择一个起点目录'
-              : <>将选择：<span className="font-extrabold text-brown-text">{currentName(current)}</span></>
-            }
-          </div>
-          <div className="flex gap-2">
-            <button onClick={onClose}
-              className="bg-cream text-brown-mute text-sm font-extrabold px-4 py-2 rounded-[10px]
-                hover:bg-[#F5E8DD] transition-colors">
-              取消
-            </button>
-            <button onClick={confirmSelect} disabled={loading || isVirtualRoot}
-              className="bg-peach text-white text-sm font-extrabold px-5 py-2 rounded-[10px]
-                hover:opacity-90 transition-opacity disabled:opacity-30">
-              ✓ 选定此目录
-            </button>
-          </div>
-        </div>
-      </div>
     </div>
   )
 }
@@ -494,16 +365,14 @@ export default function ParentPage() {
   const [selectedIds,  setSelectedIds]  = useState<Set<number>>(new Set())
 
   // Pool state
-  const [allChildren,        setAllChildren]        = useState<{id: string; name: string; age?: number; daily_count?: number; min_duration_s?: number | null}[]>([])
-  const [localCursors,       setLocalCursors]       = useState<Record<string, string | null>>({})
+  const [allChildren,        setAllChildren]        = useState<{id: string; name: string; age?: number; daily_count?: number; min_duration_s?: number | null; cursor_library_id?: number | null; cursor_filename?: string | null}[]>([])
+  const [localCursorIds,     setLocalCursorIds]     = useState<Record<string, number | null>>({})
+  const [localCursorFilenames, setLocalCursorFilenames] = useState<Record<string, string | null>>({})
   const [localCounts,        setLocalCounts]        = useState<Record<string, number>>({})
   const [localMinDurations,  setLocalMinDurations]  = useState<Record<string, string>>({})
-  const [localPdfDirs,       setLocalPdfDirs]       = useState<Record<string, string | null>>({})
-  const [childPdfLevels,     setChildPdfLevels]     = useState<Record<string, PdfLevel[]>>({})
   const [loadingPool,        setLoadingPool]        = useState(false)
   const [savingChild,        setSavingChild]        = useState<string | null>(null)
   const [poolModal,          setPoolModal]          = useState<string | null>(null) // childId
-  const [dirModal,           setDirModal]           = useState<string | null>(null) // childId
   const [addUserOpen,        setAddUserOpen]        = useState(false)
   const [newUserName,        setNewUserName]        = useState('')
   const [newUserAge,         setNewUserAge]         = useState('')
@@ -544,7 +413,7 @@ export default function ParentPage() {
   useEffect(() => {
     if (view !== 'dashboard') return
     fetch('/api/children').then(r => r.json())
-      .then((data: any[]) => setAllChildren(data.map(c => ({ id: c.id, name: c.name, age: c.age, daily_count: c.daily_count, min_duration_s: c.min_duration_s }))))
+      .then((data: any[]) => setAllChildren(data.map(c => ({ id: c.id, name: c.name, age: c.age, daily_count: c.daily_count, min_duration_s: c.min_duration_s, cursor_library_id: c.cursor_library_id ?? null, cursor_filename: c.cursor_filename ?? null }))))
       .catch(() => {})
   }, [view])
 
@@ -575,31 +444,28 @@ export default function ParentPage() {
     setLoadingPool(true)
     try {
       const results: any[] = await fetch('/api/children').then(r => r.json())
-      setAllChildren(results.map(c => ({ id: c.id, name: c.name, age: c.age, daily_count: c.daily_count, min_duration_s: c.min_duration_s })))
-      const cursors:   Record<string, string | null> = {}
-      const counts:    Record<string, number>        = {}
-      const durations: Record<string, string>        = {}
-      const dirs:      Record<string, string | null> = {}
+      setAllChildren(results.map(c => ({
+        id: c.id, name: c.name, age: c.age, daily_count: c.daily_count,
+        min_duration_s: c.min_duration_s,
+        cursor_library_id: c.cursor_library_id ?? null,
+        cursor_filename: c.cursor_filename ?? null,
+      })))
+      const cursorIds:  Record<string, number | null> = {}
+      const cursorFns:  Record<string, string | null> = {}
+      const counts:     Record<string, number>        = {}
+      const durations:  Record<string, string>        = {}
       results.forEach(c => {
-        cursors[c.id]   = c.cursor_pdf ?? null
-        counts[c.id]    = c.daily_count ?? 3
-        durations[c.id] = c.min_duration_s != null
+        cursorIds[c.id]  = c.cursor_library_id ?? null
+        cursorFns[c.id]  = c.cursor_filename ?? null
+        counts[c.id]     = c.daily_count ?? 3
+        durations[c.id]  = c.min_duration_s != null
           ? String(Math.round(c.min_duration_s / 60))
           : ''
-        dirs[c.id] = c.pdf_dir ?? null
       })
-      setLocalCursors(cursors)
+      setLocalCursorIds(cursorIds)
+      setLocalCursorFilenames(cursorFns)
       setLocalCounts(counts)
       setLocalMinDurations(durations)
-      setLocalPdfDirs(dirs)
-      // fetch per-child PDF levels for preview
-      const levels: Record<string, PdfLevel[]> = {}
-      await Promise.all(results.map((c: any) =>
-        fetch(`/api/children/${c.id}/pdfs/list`).then(r => r.json())
-          .then((ls: PdfLevel[]) => { levels[c.id] = ls })
-          .catch(() => { levels[c.id] = [] })
-      ))
-      setChildPdfLevels(levels)
     } finally {
       setLoadingPool(false)
     }
@@ -607,12 +473,6 @@ export default function ParentPage() {
 
   const handleOpenPoolModal = (childId: string) => {
     setPoolModal(childId)
-  }
-
-  const handleSelectCursor = (relativePath: string) => {
-    if (!poolModal) return
-    setLocalCursors(prev => ({ ...prev, [poolModal]: relativePath }))
-    setPoolModal(null)
   }
 
   const handleSaveConfig = async (childId: string) => {
@@ -624,7 +484,7 @@ export default function ParentPage() {
         method: 'POST',
         body: JSON.stringify({
           child_id: childId,
-          cursor_pdf: localCursors[childId] ?? null,
+          cursor_library_id: localCursorIds[childId] ?? null,
           daily_count: localCounts[childId],
           min_duration_s,
         }),
@@ -691,23 +551,9 @@ export default function ParentPage() {
 
   const handleOpenRecModal = () => { setRecModal(true) }
 
-  const handleSelectRecPdf = (relativePath: string) => {
-    setRecPdf(relativePath)
+  const handleSelectRecPdf = (_libraryId: number, filename: string) => {
+    setRecPdf(filename)
     setRecModal(false)
-  }
-
-  const handleDirSelect = async (childId: string, selectedDir: string) => {
-    const res = await adminFetch('/api/admin/pool/configure', {
-      method: 'POST',
-      body: JSON.stringify({ child_id: childId, pdf_dir: selectedDir }),
-    })
-    if (!res.ok) { alert('保存目录失败'); return }
-    setLocalPdfDirs(prev => ({ ...prev, [childId]: selectedDir }))
-    setDirModal(null)
-    // reload this child's PDF levels for preview
-    fetch(`/api/children/${childId}/pdfs/list`).then(r => r.json())
-      .then((ls: PdfLevel[]) => setChildPdfLevels(prev => ({ ...prev, [childId]: ls })))
-      .catch(() => {})
   }
 
   const handleAddUser = async () => {
@@ -726,16 +572,6 @@ export default function ParentPage() {
     const res = await adminFetch(`/api/admin/children/${childId}`, { method: 'DELETE' })
     if (!res.ok) { alert('删除失败'); return }
     await refreshChildConfigs()
-  }
-
-  const computePreview = (childId: string): PdfFile[] => {
-    const cursor = localCursors[childId] ?? null
-    const count  = localCounts[childId] ?? 3
-    if (!cursor) return []
-    const flatPdfs = (childPdfLevels[childId] ?? []).flatMap(l => l.files)
-    const idx = flatPdfs.findIndex(p => p.relativePath === cursor)
-    if (idx === -1) return []
-    return flatPdfs.slice(idx, idx + count)
   }
 
   // ── Auth handlers ─────────────────────────────────────────────────────────
@@ -991,15 +827,13 @@ export default function ParentPage() {
                 {allChildren.map(c => (
                   <PoolChildCard key={c.id}
                     childName={c.name}
-                    pdfDir={localPdfDirs[c.id] ?? null}
-                    cursor={localCursors[c.id] ?? null}
+                    cursor={localCursorIds[c.id] ?? c.cursor_library_id ?? null}
+                    cursorFilename={localCursorFilenames[c.id] !== undefined ? localCursorFilenames[c.id] : (c.cursor_filename ?? null)}
                     count={localCounts[c.id] ?? 3}
                     minDurationMin={localMinDurations[c.id] ?? ''}
-                    preview={computePreview(c.id)}
                     onChangeCursor={() => handleOpenPoolModal(c.id)}
                     onChangeCount={n => setLocalCounts(prev => ({ ...prev, [c.id]: n }))}
                     onChangeMinDuration={v => setLocalMinDurations(prev => ({ ...prev, [c.id]: v }))}
-                    onChangeDir={() => setDirModal(c.id)}
                     onSave={() => handleSaveConfig(c.id)}
                     saving={savingChild === c.id}
                   />
@@ -1144,21 +978,15 @@ export default function ParentPage() {
 
       </div>
 
-      {/* Per-child PDF dir modal */}
-      {dirModal && (
-        <BrowseDirModal
-          adminFetchFn={adminFetch}
-          onSelect={selected => handleDirSelect(dirModal, selected)}
-          onClose={() => setDirModal(null)}
-        />
-      )}
-
       {/* Pool cursor PDF modal */}
       {poolModal && (
         <AddPdfModal
-          childId={poolModal}
           childName={allChildren.find(c => c.id === poolModal)?.name ?? ''}
-          onAdd={handleSelectCursor}
+          onAdd={(libraryId, filename) => {
+            setLocalCursorIds(prev => ({ ...prev, [poolModal]: libraryId }))
+            setLocalCursorFilenames(prev => ({ ...prev, [poolModal]: filename }))
+            setPoolModal(null)
+          }}
           onClose={() => setPoolModal(null)}
         />
       )}
@@ -1166,7 +994,6 @@ export default function ParentPage() {
       {/* Recitation PDF modal */}
       {recModal && (
         <AddPdfModal
-          childId={recChildId}
           childName={allChildren.find(c => c.id === recChildId)?.name ?? ''}
           onAdd={handleSelectRecPdf}
           onClose={() => setRecModal(false)}

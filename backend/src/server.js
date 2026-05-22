@@ -31,96 +31,6 @@ function todayLocal() {
 app.use(cors());
 app.use(express.json());
 
-// ── PDF helpers ──────────────────────────────────────────────────────────────
-
-const SKIP_DIR_NAMES = new Set([
-  '.Trashes', '.Spotlight-V100', '.DocumentRevisions-V100',
-  '.fseventsd', '.TemporaryItems', '.HFS+ Private Directory Data',
-  'node_modules', '.git',
-])
-const MAX_PDFS_PER_SCAN = 5000
-const SCAN_TIMEOUT_MS   = 8000
-
-function getPdfDir() {
-  return db.prepare("SELECT value FROM config WHERE key='pdf_dir'").get()?.value || '';
-}
-
-function collectPdfsAt(rootDir, currentDir, results, deadline) {
-  if (results.length >= MAX_PDFS_PER_SCAN || Date.now() > deadline) return
-  let entries
-  try { entries = fs.readdirSync(currentDir, { withFileTypes: true }) } catch (_) { return }
-  entries.sort((a, b) => a.name.localeCompare(b.name))
-  for (const entry of entries) {
-    if (results.length >= MAX_PDFS_PER_SCAN || Date.now() > deadline) return
-    if (entry.name.startsWith('.') || SKIP_DIR_NAMES.has(entry.name)) continue
-    const fullPath = path.join(currentDir, entry.name)
-    if (entry.isDirectory()) collectPdfsAt(rootDir, fullPath, results, deadline)
-    else if (entry.name.toLowerCase().endsWith('.pdf'))
-      results.push({ filename: entry.name, relativePath: path.relative(rootDir, fullPath) })
-  }
-}
-
-function listPdfsByLevelAt(dir) {
-  const levels = []
-  const deadline = Date.now() + SCAN_TIMEOUT_MS
-  let entries
-  try { entries = fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name)) } catch (_) { return levels }
-  // 根目录散落的 PDF 作为一个虚拟 level，排在最前
-  const rootFiles = []
-  for (const entry of entries) {
-    if (entry.name.startsWith('.') || SKIP_DIR_NAMES.has(entry.name)) continue
-    if (!entry.isDirectory() && entry.name.toLowerCase().endsWith('.pdf')) {
-      rootFiles.push({ filename: entry.name, relativePath: entry.name })
-    }
-  }
-  if (rootFiles.length > 0) levels.push({ level: '(根目录)', files: rootFiles })
-  // 一级子目录递归扫描
-  for (const entry of entries) {
-    if (Date.now() > deadline) break
-    if (!entry.isDirectory() || entry.name.startsWith('.') || SKIP_DIR_NAMES.has(entry.name)) continue
-    const files = []
-    collectPdfsAt(dir, path.join(dir, entry.name), files, deadline)
-    if (files.length > 0) levels.push({ level: entry.name, files })
-  }
-  return levels
-}
-
-function findFirstPdf(dir) {
-  const results = []
-  collectPdfsAt(dir, dir, results, Date.now() + SCAN_TIMEOUT_MS)
-  return results[0] ?? null
-}
-
-function probePdfCount(rootDir, deadline, max = 1) {
-  let found = 0
-  function walk(dir) {
-    if (found >= max || Date.now() > deadline) return
-    let entries
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch (_) { return }
-    for (const e of entries) {
-      if (found >= max || Date.now() > deadline) return
-      if (e.name.startsWith('.') || SKIP_DIR_NAMES.has(e.name)) continue
-      const full = path.join(dir, e.name)
-      if (e.isDirectory()) walk(full)
-      else if (e.name.toLowerCase().endsWith('.pdf')) found++
-    }
-  }
-  walk(rootDir)
-  return found
-}
-
-const _pdfCacheByDir = new Map() // dir → { results, truncated }
-function findPdfsFlatFor(dir) {
-  if (!dir) return []
-  if (_pdfCacheByDir.has(dir)) return _pdfCacheByDir.get(dir).results
-  const deadline = Date.now() + SCAN_TIMEOUT_MS
-  const results = []
-  collectPdfsAt(dir, dir, results, deadline)
-  _pdfCacheByDir.set(dir, { results, truncated: results.length >= MAX_PDFS_PER_SCAN })
-  return results
-}
-function findPdfsFlat() { return findPdfsFlatFor(getPdfDir()) }
-
 function getTodayPool(childId) {
   const child = db.prepare('SELECT cursor_library_id, daily_count FROM children WHERE id = ?').get(childId);
   if (!child || !child.cursor_library_id) return [];
@@ -151,23 +61,16 @@ app.get('/test', (req, res) => {
   res.json({ ok: true, timestamp: new Date() });
 });
 
-app.get('/api/pdfs/sample', (req, res) => {
-  try {
-    const pdfDir = getPdfDir();
-    const first = findFirstPdf(pdfDir);
-    if (!first) return res.status(404).json({ error: 'No PDF files found' });
-    res.sendFile(path.join(pdfDir, first.relativePath));
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // ── Sprint 1 routes ───────────────────────────────────────────────────────────
 
 app.get('/api/children', (req, res) => {
   try {
     const today = todayLocal();
-    const children = db.prepare('SELECT * FROM children').all();
+    const children = db.prepare(`
+      SELECT c.*, l.filename AS cursor_filename
+      FROM children c
+      LEFT JOIN pdf_library l ON l.id = c.cursor_library_id
+    `).all();
     const result = children.map(child => {
       const session = db.prepare(
         'SELECT status, pdfs_required FROM reading_sessions WHERE child_id = ? AND date = ? ORDER BY id DESC LIMIT 1'
@@ -211,34 +114,31 @@ app.get('/api/children/:id/pool', (req, res) => {
   }
 });
 
-app.get('/api/pdfs/list', (req, res) => {
-  req.setTimeout(15000, () => {
-    if (!res.headersSent) res.status(504).json({ error: 'scan_timeout' })
-  })
-  const t0 = Date.now()
+// Sprint 0B': 图书馆列表（家长面板"更换起点"对话框用）
+app.get('/api/library/list', (req, res) => {
   try {
-    const dir = getPdfDir()
-    const result = listPdfsByLevelAt(dir)
-    const ms = Date.now() - t0
-    if (ms > 2000) console.warn(`[pdfs/list] slow scan ${ms}ms dir=${dir} levels=${result.length}`)
-    res.json(result)
-  } catch (err) { res.status(500).json({ error: err.message }) }
-})
-
-app.get('/api/children/:id/pdfs/list', (req, res) => {
-  req.setTimeout(15000, () => {
-    if (!res.headersSent) res.status(504).json({ error: 'scan_timeout' })
-  })
-  const t0 = Date.now()
-  try {
-    const child = db.prepare('SELECT pdf_dir FROM children WHERE id = ?').get(req.params.id)
-    if (!child) return res.status(404).json({ error: 'not found' })
-    const dir = child.pdf_dir || getPdfDir()
-    const result = listPdfsByLevelAt(dir)
-    const ms = Date.now() - t0
-    if (ms > 2000) console.warn(`[pdfs/list child=${req.params.id}] slow scan ${ms}ms dir=${dir} levels=${result.length}`)
-    res.json(result)
-  } catch (err) { res.status(500).json({ error: err.message }) }
+    const q = (req.query.q || '').trim()
+    let rows
+    if (q) {
+      rows = db.prepare(`
+        SELECT id, sha256, filename, title, size_bytes, is_private, is_builtin
+        FROM pdf_library
+        WHERE filename LIKE ?
+        ORDER BY filename
+        LIMIT 2000
+      `).all(`%${q}%`)
+    } else {
+      rows = db.prepare(`
+        SELECT id, sha256, filename, title, size_bytes, is_private, is_builtin
+        FROM pdf_library
+        ORDER BY filename
+        LIMIT 2000
+      `).all()
+    }
+    res.json({ items: rows, total: rows.length })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
 })
 
 // Sprint 0B: 用 pdf_library.id 取本地 data/pdfs/ 下的 PDF，不再走 NAS
@@ -256,36 +156,6 @@ app.get('/api/library/:id/file', (req, res) => {
   }
 });
 
-app.get('/api/children/:id/pdfs/file', (req, res) => {
-  try {
-    const child = db.prepare('SELECT pdf_dir FROM children WHERE id = ?').get(req.params.id)
-    if (!child) return res.status(404).json({ error: 'not found' })
-    const pdfDir = child.pdf_dir || getPdfDir()
-    const rel = req.query.path
-    if (!rel) return res.status(400).json({ error: 'path query param required' })
-    const normalized = path.normalize(rel)
-    if (normalized.startsWith('..')) return res.status(403).json({ error: 'forbidden' })
-    const fullPath = path.join(pdfDir, normalized)
-    if (!fullPath.startsWith(pdfDir)) return res.status(403).json({ error: 'forbidden' })
-    res.sendFile(fullPath)
-  } catch (err) { res.status(500).json({ error: err.message }) }
-})
-
-app.get('/api/pdfs/file', (req, res) => {
-  try {
-    const pdfDir = getPdfDir();
-    const rel = req.query.path;
-    if (!rel) return res.status(400).json({ error: 'path query param required' });
-    const normalized = path.normalize(rel);
-    if (normalized.startsWith('..')) return res.status(403).json({ error: 'forbidden' });
-    const fullPath = path.join(pdfDir, normalized);
-    if (!fullPath.startsWith(pdfDir)) return res.status(403).json({ error: 'forbidden' });
-    res.sendFile(fullPath);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 app.get('/api/config', (req, res) => {
   try {
     const rows = db.prepare('SELECT key, value FROM config').all();
@@ -295,63 +165,6 @@ app.get('/api/config', (req, res) => {
       else config[key] = value;
     }
     res.json(config);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-const FS_ROOTS = ['/Users/homer', '/Volumes']
-const VIRTUAL_ROOT = '__roots__'
-
-app.get('/api/admin/fs/browse', adminAuth, (req, res) => {
-  try {
-    const reqPath = req.query.path
-
-    if (!reqPath || reqPath === VIRTUAL_ROOT) {
-      return res.json({
-        path: VIRTUAL_ROOT,
-        parent: null,
-        dirs: [
-          { name: '📁 个人目录 (Users/homer)', fullPath: '/Users/homer' },
-          { name: '💾 网络共享盘 (Volumes)',     fullPath: '/Volumes' },
-        ],
-      })
-    }
-
-    const target = path.normalize(reqPath)
-    const allowed = FS_ROOTS.some(root => target === root || target.startsWith(root + '/'))
-    if (!allowed) return res.status(403).json({ error: '超出允许范围' })
-
-    if (!fs.existsSync(target) || !fs.statSync(target).isDirectory()) {
-      return res.status(404).json({ error: '目录不存在' })
-    }
-
-    const dirs = fs.readdirSync(target, { withFileTypes: true })
-      .filter(e => e.isDirectory() && !e.name.startsWith('.'))
-      .map(e => ({ name: e.name, fullPath: path.join(target, e.name) }))
-      .sort((a, b) => a.name.localeCompare(b.name))
-
-    const parent = FS_ROOTS.includes(target) ? VIRTUAL_ROOT : path.dirname(target)
-    res.json({ path: target, parent, dirs })
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
-})
-
-app.post('/api/admin/config', adminAuth, (req, res) => {
-  try {
-    const { pdf_dir } = req.body;
-    if (!pdf_dir) return res.status(400).json({ error: 'pdf_dir required' });
-    const inAllowedRoot = FS_ROOTS.some(root => pdf_dir === root || pdf_dir.startsWith(root + '/'))
-    if (!inAllowedRoot) return res.status(400).json({ error: 'PDF 目录必须在 /Users/homer 或 /Volumes 下' });
-    if (!fs.existsSync(pdf_dir) || !fs.statSync(pdf_dir).isDirectory()) {
-      return res.status(400).json({ error: '路径不存在或不是目录' });
-    }
-    const found = probePdfCount(pdf_dir, Date.now() + 3000, 1)
-    if (found === 0) return res.status(400).json({ error: '目录下未找到 PDF 文件（或扫描超时），请选择正确的 PDF 目录' })
-    db.prepare("UPDATE config SET value = ? WHERE key = 'pdf_dir'").run(pdf_dir);
-    _pdfCacheByDir.clear()
-    res.json({ ok: true, pdf_dir });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -904,48 +717,50 @@ app.delete('/api/admin/children/:id', adminAuth, (req, res) => {
 
 app.post('/api/admin/pool/configure', adminAuth, (req, res) => {
   try {
-    const { child_id, cursor_pdf, daily_count, min_duration_s, pdf_dir } = req.body
+    const { child_id, cursor_library_id, daily_count, min_duration_s } = req.body
     if (!child_id) return res.status(400).json({ error: 'child_id required' })
-    if (cursor_pdf === undefined && daily_count === undefined && min_duration_s === undefined && pdf_dir === undefined) {
+    if (cursor_library_id === undefined && daily_count === undefined && min_duration_s === undefined) {
       return res.status(400).json({ error: 'at least one field required' })
     }
-    const cursorVal = cursor_pdf !== undefined ? cursor_pdf : null
+
+    let cursorLibId = null
+    let cursorFilename = null
+    if (cursor_library_id !== undefined && cursor_library_id !== null) {
+      const lib = db.prepare('SELECT id, filename FROM pdf_library WHERE id = ?').get(cursor_library_id)
+      if (!lib) return res.status(400).json({ error: 'invalid cursor_library_id' })
+      cursorLibId = lib.id
+      cursorFilename = lib.filename
+    }
+
     const countVal = daily_count !== undefined ? parseInt(daily_count) : null
     if (countVal !== null && (isNaN(countVal) || countVal < 1 || countVal > 10)) {
       return res.status(400).json({ error: 'daily_count must be 1-10' })
     }
+
     db.prepare(`
       UPDATE children SET
-        cursor_pdf  = CASE WHEN ? IS NOT NULL THEN ? ELSE cursor_pdf END,
-        daily_count = CASE WHEN ? IS NOT NULL THEN ? ELSE daily_count END
+        cursor_library_id = CASE WHEN ? IS NOT NULL THEN ? ELSE cursor_library_id END,
+        cursor_pdf        = CASE WHEN ? IS NOT NULL THEN ? ELSE cursor_pdf END,
+        daily_count       = CASE WHEN ? IS NOT NULL THEN ? ELSE daily_count END
       WHERE id = ?
-    `).run(cursorVal, cursorVal, countVal, countVal, child_id)
+    `).run(cursorLibId, cursorLibId, cursorFilename, cursorFilename, countVal, countVal, child_id)
+
     if (min_duration_s !== undefined) {
       const durVal = min_duration_s === null ? null : parseInt(min_duration_s)
       if (durVal !== null && (isNaN(durVal) || durVal < 60 || durVal > 3600)) {
-        return res.status(400).json({ error: 'min_duration_s must be 60-3600 or null' })
+        return res.status(400).json({ error: 'min_duration_s must be 60-3600' })
       }
       db.prepare('UPDATE children SET min_duration_s = ? WHERE id = ?').run(durVal, child_id)
     }
-    if (pdf_dir !== undefined) {
-      const trimmed = (pdf_dir ?? '').trim()
-      if (trimmed && !FS_ROOTS.some(r => trimmed.startsWith(r))) {
-        return res.status(403).json({ error: 'pdf_dir outside allowed roots' })
-      }
-      db.prepare('UPDATE children SET pdf_dir = ? WHERE id = ?').run(trimmed || null, child_id)
-    }
-    _pdfCacheByDir.clear()
-    const child = db.prepare('SELECT * FROM children WHERE id = ?').get(child_id)
-    res.json(child)
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
+
+    res.json(db.prepare('SELECT * FROM children WHERE id = ?').get(child_id))
+  } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
 app.get('/api/admin/pool/preview/:childId', adminAuth, (req, res) => {
   try {
     const pool = getTodayPool(req.params.childId).map(p => ({
-      relativePath: p.relativePath,
+      library_id: p.library_id,
       filename: p.filename,
     }))
     res.json(pool)
