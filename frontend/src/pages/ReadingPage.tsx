@@ -68,7 +68,7 @@ function WaveformCanvas({ analyserNode }: { analyserNode: AnalyserNode | null })
     return () => cancelAnimationFrame(rafRef.current)
   }, [analyserNode])
 
-  return <canvas ref={canvasRef} width={600} height={48} className="w-full h-12 rounded-[10px]" />
+  return <canvas ref={canvasRef} width={600} height={24} className="w-full h-6 rounded-[8px]" />
 }
 
 // ── Page indicator dots ───────────────────────────────────────────────────────
@@ -109,6 +109,15 @@ export default function ReadingPage() {
   const [nowHHMM,      setNowHHMM]      = useState(getCurrentHHMM)
   const [aspectRatio,  setAspectRatio]  = useState(0.707)  // PDF page w/h, default A4 portrait
 
+  // PDF zoom + layout preferences (persisted per child)
+  const [pdfZoom, setPdfZoom] = useState(() => {
+    const stored = localStorage.getItem(`pdfZoom:${childId ?? 'default'}`)
+    return stored ? Math.max(0.5, Math.min(2.0, parseFloat(stored))) : 1.0
+  })
+  const [pdfLayout, setPdfLayout] = useState<'auto' | 'single'>(() => {
+    return (localStorage.getItem(`pdfLayout:${childId ?? 'default'}`) as 'auto' | 'single') || 'auto'
+  })
+
   // ── Responsive window width ───────────────────────────────────────────────
   const [winWidth, setWinWidth] = useState(() => window.innerWidth)
   useEffect(() => {
@@ -116,6 +125,13 @@ export default function ReadingPage() {
     window.addEventListener('resize', h)
     return () => window.removeEventListener('resize', h)
   }, [])
+
+  useEffect(() => {
+    if (childId) localStorage.setItem(`pdfZoom:${childId}`, String(pdfZoom))
+  }, [pdfZoom, childId])
+  useEffect(() => {
+    if (childId) localStorage.setItem(`pdfLayout:${childId}`, pdfLayout)
+  }, [pdfLayout, childId])
 
   // ── PDF area ResizeObserver ───────────────────────────────────────────────
   const pdfAreaRef   = useRef<HTMLDivElement>(null)
@@ -133,7 +149,8 @@ export default function ReadingPage() {
   }, [child, config, pool.length])
 
   // ── Derived layout ────────────────────────────────────────────────────────
-  const isDualPage = winWidth >= 1280
+  // Dual page: user didn't force single, not on cover, and screen wide enough
+  const showDualPage = pdfLayout !== 'single' && page !== 1 && winWidth >= 768
 
   // Frame max-width class
   const frameMaxW =
@@ -141,25 +158,24 @@ export default function ReadingPage() {
     : winWidth >= 768  ? 'max-w-[720px]'
     : 'max-w-[440px]'
 
-  // Page width: cover fits height; dual pages fill width (allow scroll); single always fits both
-  // Always take min(width-based, height-based) so pages are never clipped
+  // Page width: always min(width-based, height-based) so pages are never clipped
   const pageWidth = (() => {
-    if (pdfAreaW <= 0 || pdfAreaH <= 0) return isDualPage ? 600 : 400
-    const showingCover = isDualPage && page === 1
-    const count = showingCover ? 1 : (isDualPage ? 2 : 1)
-    const gap   = (isDualPage && !showingCover) ? 24 : 0
+    if (pdfAreaW <= 0 || pdfAreaH <= 0) return showDualPage ? 600 : 400
+    const count = showDualPage ? 2 : 1
+    const gap   = showDualPage ? 24 : 0
     const widthBased  = (pdfAreaW - gap) / count
     const heightBased = (pdfAreaH - 24) * aspectRatio
     return Math.max(200, Math.min(widthBased, heightBased))
   })()
+  const finalPageWidth = pageWidth * pdfZoom
 
-  // Reset to page 1 when dual/single mode changes
-  const prevDual = useRef(isDualPage)
+  // Reset to page 1 when user toggles layout preference
+  const prevLayout = useRef(pdfLayout)
   useEffect(() => {
-    if (prevDual.current !== isDualPage) {
-      setPage(1); prevDual.current = isDualPage
+    if (prevLayout.current !== pdfLayout) {
+      setPage(1); prevLayout.current = pdfLayout
     }
-  }, [isDualPage])
+  }, [pdfLayout])
 
   // ── Recorder ─────────────────────────────────────────────────────────────
   const maxSilenceS = config ? parseInt(config.max_consecutive_silence_s) : 15
@@ -201,7 +217,7 @@ export default function ReadingPage() {
     fetch(`/api/sessions/${sessionId}/pdf-opened`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pdf_library_id: pool[0].library_id, pdf_filename: pool[0].pdf_filename, page_number: 1, is_dual: isDualPage, client_timestamp: new Date().toISOString() }),
+      body: JSON.stringify({ pdf_library_id: pool[0].library_id, pdf_filename: pool[0].pdf_filename, page_number: 1, is_dual: false, client_timestamp: new Date().toISOString() }),
     }).catch(console.error)
   }, [sessionId]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -228,30 +244,32 @@ export default function ReadingPage() {
 
   const goNext = useCallback(() => {
     const { pool, pdfIdx, page, numPages, sessionId } = S.current
-    if (numPages === 0) return
-    const isDualNow = winWidth >= 1280
-    const nextPage = isDualNow ? (page === 1 ? 2 : page + 2) : page + 1
-    if (nextPage <= numPages) {
+    if (!pool[pdfIdx]) return
+    const userSingle = pdfLayout === 'single'
+    const currentlySingle = userSingle || page === 1 || winWidth < 768
+    if (page + (currentlySingle ? 1 : 2) <= numPages) {
+      const nextPage = page + (currentlySingle ? 1 : 2)
       setPage(nextPage)
-      const lastShown = isDualNow && nextPage > 1 && nextPage + 1 <= numPages ? nextPage + 1 : nextPage
-      reportPdf(pool[pdfIdx], sessionId, numPages > 0 && lastShown === numPages, nextPage, isDualNow)
+      const nextSingle = userSingle || nextPage === 1 || winWidth < 768
+      const lastShown = nextSingle ? nextPage : Math.min(nextPage + 1, numPages)
+      reportPdf(pool[pdfIdx], sessionId, numPages > 0 && lastShown === numPages, nextPage, !nextSingle)
     } else if (pdfIdx < pool.length - 1) {
       const next = pdfIdx + 1
       setPdfIdx(next); setPage(1); setNumPages(0)
-      reportPdf(pool[next], sessionId, false, 1, isDualNow)
+      reportPdf(pool[next], sessionId, false, 1, false)
     }
-  }, [winWidth, childId])
+  }, [winWidth, childId, pdfLayout])
 
   const goPrev = useCallback(() => {
     const { pool, pdfIdx, page, sessionId } = S.current
-    const isDualNow = winWidth >= 1280
-    const prevPage = isDualNow
-      ? (page === 2 ? 1 : Math.max(1, page - 2))
-      : Math.max(1, page - 1)
+    const userSingle = pdfLayout === 'single'
+    const currentlySingle = userSingle || page === 1 || winWidth < 768
+    const prevPage = Math.max(1, page - (currentlySingle ? 1 : 2))
     if (prevPage === page) return
     setPage(prevPage)
-    reportPdf(pool[pdfIdx], sessionId, false, prevPage, isDualNow)
-  }, [winWidth, childId])
+    const prevSingle = userSingle || prevPage === 1 || winWidth < 768
+    reportPdf(pool[pdfIdx], sessionId, false, prevPage, !prevSingle)
+  }, [winWidth, childId, pdfLayout])
 
   // Keyboard
   useEffect(() => {
@@ -380,6 +398,28 @@ export default function ReadingPage() {
           </div>
         </div>
 
+        {/* ── PDF zoom / layout toolbar ── */}
+        <div className="bg-cream-pdf flex items-center justify-end gap-2 px-3 py-1.5 shrink-0 border-b border-black/5">
+          <button
+            onClick={() => setPdfZoom(z => Math.max(0.5, +(z - 0.1).toFixed(2)))}
+            className="w-8 h-8 rounded-lg bg-shell-dark text-white font-extrabold text-sm
+              active:scale-95 transition-transform">−</button>
+          <span className="text-xs text-brown-text font-extrabold tabular-nums w-12 text-center">
+            {Math.round(pdfZoom * 100)}%
+          </span>
+          <button
+            onClick={() => setPdfZoom(z => Math.min(2.0, +(z + 0.1).toFixed(2)))}
+            className="w-8 h-8 rounded-lg bg-shell-dark text-white font-extrabold text-sm
+              active:scale-95 transition-transform">+</button>
+          <button
+            onClick={() => setPdfLayout(p => p === 'single' ? 'auto' : 'single')}
+            className={`ml-2 px-3 h-8 rounded-lg text-xs font-extrabold
+              ${pdfLayout === 'single' ? 'bg-peach text-white' : 'bg-shell-dark text-white'}
+              active:scale-95 transition-transform`}>
+            {pdfLayout === 'single' ? '单页' : '双页'}
+          </button>
+        </div>
+
         {/* ── PDF area ── */}
         <div
           ref={pdfAreaRef}
@@ -402,23 +442,23 @@ export default function ReadingPage() {
                 } catch (_) {}
                 if (doc.numPages === 1) {
                   const { pool: p, pdfIdx: pi, sessionId: sid } = S.current
-                  reportPdf(p[pi], sid, true, 1, isDualPage)
+                  reportPdf(p[pi], sid, true, 1, false)
                 }
               }}
               loading={<div className="text-brown-mute text-sm mt-20">加载 PDF...</div>}
               error={<div className="text-red-400 text-sm mt-20">PDF 加载失败</div>}
             >
-              {isDualPage && page > 1 ? (
+              {showDualPage ? (
                 <div className="flex gap-6 justify-center">
-                  <Page pageNumber={page}   width={pageWidth}
+                  <Page pageNumber={page}   width={finalPageWidth}
                     renderTextLayer={false} renderAnnotationLayer={false} />
                   {page + 1 <= numPages && (
-                    <Page pageNumber={page+1} width={pageWidth}
+                    <Page pageNumber={page+1} width={finalPageWidth}
                       renderTextLayer={false} renderAnnotationLayer={false} />
                   )}
                 </div>
               ) : (
-                <Page pageNumber={page} width={pageWidth}
+                <Page pageNumber={page} width={finalPageWidth}
                   renderTextLayer={false} renderAnnotationLayer={false} />
               )}
             </Document>
@@ -431,13 +471,13 @@ export default function ReadingPage() {
         <div className="bg-shell-dark py-5 flex justify-center items-center shrink-0">
           <div className="relative flex items-center justify-center">
             {recorder.isRecording && (
-              <div className="absolute w-28 h-28 rounded-full bg-peach/25 animate-ping" />
+              <div className="absolute w-20 h-20 rounded-full bg-peach/25 animate-ping" />
             )}
             {!recorder.isRecording ? (
               <button
                 onClick={handleStart}
                 disabled={isSubmitting || !sessionId}
-                className="w-[84px] h-[84px] rounded-full
+                className="w-[56px] h-[56px] rounded-full
                   bg-gradient-to-br from-peach to-[#C05030]
                   shadow-[0_6px_24px_rgba(224,122,95,0.55)]
                   border-2 border-white/20
@@ -452,7 +492,7 @@ export default function ReadingPage() {
               <button
                 onClick={handleSubmit}
                 disabled={isSubmitting}
-                className="w-[84px] h-[84px] rounded-full
+                className="w-[56px] h-[56px] rounded-full
                   bg-gradient-to-br from-peach to-[#C05030]
                   shadow-[0_6px_24px_rgba(224,122,95,0.55)]
                   border-2 border-white/20

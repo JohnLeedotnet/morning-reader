@@ -57,7 +57,7 @@ function WaveformCanvas({ analyserNode }: { analyserNode: AnalyserNode | null })
     return () => cancelAnimationFrame(rafRef.current)
   }, [analyserNode])
 
-  return <canvas ref={canvasRef} width={600} height={48} className="w-full h-12 rounded-[10px]" />
+  return <canvas ref={canvasRef} width={600} height={24} className="w-full h-6 rounded-[8px]" />
 }
 
 export default function RecitationPage() {
@@ -214,13 +214,13 @@ export default function RecitationPage() {
         <div className="bg-shell-dark py-5 flex justify-center items-center shrink-0">
           <div className="relative flex items-center justify-center">
             {recorder.isRecording && (
-              <div className="absolute w-28 h-28 rounded-full bg-peach/25 animate-ping" />
+              <div className="absolute w-20 h-20 rounded-full bg-peach/25 animate-ping" />
             )}
             {!recorder.isRecording ? (
               <button
                 onClick={handleStart}
                 disabled={isSubmitting || !sessionId}
-                className="w-[84px] h-[84px] rounded-full
+                className="w-[56px] h-[56px] rounded-full
                   bg-gradient-to-br from-peach to-[#C05030]
                   shadow-[0_6px_24px_rgba(224,122,95,0.55)]
                   border-2 border-white/20
@@ -235,7 +235,7 @@ export default function RecitationPage() {
               <button
                 onClick={handleSubmit}
                 disabled={isSubmitting}
-                className="w-[84px] h-[84px] rounded-full
+                className="w-[56px] h-[56px] rounded-full
                   bg-gradient-to-br from-peach to-[#C05030]
                   shadow-[0_6px_24px_rgba(224,122,95,0.55)]
                   border-2 border-white/20
