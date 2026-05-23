@@ -26,7 +26,7 @@ function fmtTime(s: number) {
 
 // ── Waveform canvas ───────────────────────────────────────────────────────────
 
-function WaveformCanvas({ analyserNode }: { analyserNode: AnalyserNode | null }) {
+function WaveformCanvas({ analyserNode, className }: { analyserNode: AnalyserNode | null; className?: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const rafRef    = useRef(0)
 
@@ -68,7 +68,7 @@ function WaveformCanvas({ analyserNode }: { analyserNode: AnalyserNode | null })
     return () => cancelAnimationFrame(rafRef.current)
   }, [analyserNode])
 
-  return <canvas ref={canvasRef} width={600} height={24} className="w-full h-6 rounded-[8px]" />
+  return <canvas ref={canvasRef} width={600} height={40} className={className ?? 'w-full h-10 rounded-[8px]'} />
 }
 
 // ── Page indicator dots ───────────────────────────────────────────────────────
@@ -504,58 +504,47 @@ export default function ReadingPage() {
           <PageDots numPages={numPages} page={page} />
         </div>
 
-        {/* ── Record button zone ── */}
-        <div className="bg-shell-dark py-2 flex justify-center items-center shrink-0">
-          <div className="relative flex items-center justify-center">
+        {/* ── 合并控制条：波形按钮 + 计时统计 ── */}
+        <div className="bg-shell-dark px-3 py-2 flex items-center gap-3 shrink-0">
+          {/* 主按钮：椭圆胶囊，波形作背景，文字 z-10 叠加 */}
+          <button
+            onClick={recorder.isRecording ? handleSubmit : handleStart}
+            disabled={isSubmitting || (!recorder.isRecording && !sessionId)}
+            className={`flex-1 relative h-10 rounded-full overflow-hidden
+              ${recorder.isRecording
+                ? 'bg-gradient-to-br from-[#C54B38] to-[#9A2F1C]'
+                : 'bg-gradient-to-br from-peach to-[#C05030]'}
+              shadow-[0_4px_16px_rgba(224,122,95,0.45)]
+              border-2 border-white/20
+              active:scale-[0.98] transition-transform
+              disabled:opacity-40`}
+          >
             {recorder.isRecording && (
-              <div className="absolute w-20 h-20 rounded-full bg-peach/25 animate-ping" />
+              <WaveformCanvas
+                analyserNode={recorder.analyserNode}
+                className="absolute inset-0 w-full h-full opacity-50"
+              />
             )}
-            {!recorder.isRecording ? (
-              <button
-                onClick={handleStart}
-                disabled={isSubmitting || !sessionId}
-                className="w-[56px] h-[56px] rounded-full
-                  bg-gradient-to-br from-peach to-[#C05030]
-                  shadow-[0_6px_24px_rgba(224,122,95,0.55)]
-                  border-2 border-white/20
-                  text-white font-extrabold
-                  flex flex-col items-center justify-center
-                  active:scale-95 transition-transform disabled:opacity-40"
-                style={{ fontSize: btnTextPx }}
-              >
-                开始<br />朗读
-              </button>
-            ) : (
-              <button
-                onClick={handleSubmit}
-                disabled={isSubmitting}
-                className="w-[56px] h-[56px] rounded-full
-                  bg-gradient-to-br from-peach to-[#C05030]
-                  shadow-[0_6px_24px_rgba(224,122,95,0.55)]
-                  border-2 border-white/20
-                  text-white font-extrabold
-                  flex flex-col items-center justify-center
-                  active:scale-95 transition-transform disabled:opacity-60
-                  relative z-10"
-                style={{ fontSize: btnTextPx }}
-              >
-                停止并<br />提交
-              </button>
+            {recorder.isRecording && (
+              <span className="absolute inset-0 rounded-full ring-2 ring-white/30 animate-pulse pointer-events-none" />
             )}
-          </div>
-        </div>
+            <span className="relative z-10 text-white font-extrabold tracking-wider"
+              style={{ fontSize: btnTextPx }}>
+              {recorder.isRecording ? '停止并提交' : '开始朗读'}
+            </span>
+          </button>
 
-        {/* ── Bottom bar ── */}
-        <div className="bg-shell-darker px-4 pt-1.5 pb-2 shrink-0">
-          <WaveformCanvas analyserNode={recorder.analyserNode} />
-          <div className="flex justify-between items-center mt-2">
-            <span className="text-[11px] text-[#9A7060] font-bold tabular-nums">
+          {/* 计时 + 状态：紧凑两行 */}
+          <div className="text-right shrink-0 leading-tight">
+            <p className="text-[11px] text-[#F5E8DD] tabular-nums font-bold">
               {fmtTime(recorder.durationS)}
-            </span>
-            <span className={`text-[11px] font-bold ${voiceColor}`}>{voiceLabel}</span>
-            <span className="text-[11px] text-[#9A7060] font-bold">
-              停顿 {recorder.silenceCount} 次 · {Math.round(recorder.totalSilenceS)}s
-            </span>
+            </p>
+            <p className={`text-[10px] font-bold ${voiceColor}`}>{voiceLabel}</p>
+            {recorder.silenceCount > 0 && (
+              <p className="text-[9px] text-brown-mute">
+                停顿 {recorder.silenceCount} · {Math.round(recorder.totalSilenceS)}s
+              </p>
+            )}
           </div>
         </div>
 
