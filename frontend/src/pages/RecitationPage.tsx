@@ -108,6 +108,13 @@ export default function RecitationPage() {
   const maxSilenceS = config ? parseInt(config.max_consecutive_silence_s) : 15
   const recorder    = useReadingRecorder({ maxConsecutiveSilenceS: maxSilenceS })
 
+  const handleGoHome = () => {
+    if (recorder.isRecording) {
+      if (!confirm('正在录音中，确定退出？录音不会保存。')) return
+    }
+    navigate('/')
+  }
+
   const handleStart = async () => {
     try { await recorder.start() }
     catch (e) { setError(`麦克风错误：${(e as Error).message}`) }
@@ -181,8 +188,14 @@ export default function RecitationPage() {
         style={{ height: 'calc(100vh - 2rem)' }}
       >
         {/* Status bar */}
-        <div className="bg-shell-dark flex items-center justify-between px-4 py-3 shrink-0 gap-2">
-          <span className="font-black text-[#F5E8DD] shrink-0 leading-tight" style={{ fontSize: namePx }}>
+        <div className="bg-shell-dark flex items-center justify-between px-3 py-1.5 shrink-0 gap-2">
+          <button onClick={handleGoHome}
+            className="text-[#F5E8DD]/70 hover:text-white text-xl shrink-0 px-1
+              active:scale-95 transition-transform"
+            aria-label="返回首页">
+            ←
+          </button>
+          <span className="font-black text-[#F5E8DD] shrink-0 leading-tight truncate min-w-0" style={{ fontSize: namePx }}>
             {child.name}
           </span>
           <div className="flex-1 text-center min-w-0 px-2">
@@ -211,7 +224,7 @@ export default function RecitationPage() {
         </div>
 
         {/* Record button zone */}
-        <div className="bg-shell-dark py-5 flex justify-center items-center shrink-0">
+        <div className="bg-shell-dark py-2 flex justify-center items-center shrink-0">
           <div className="relative flex items-center justify-center">
             {recorder.isRecording && (
               <div className="absolute w-20 h-20 rounded-full bg-peach/25 animate-ping" />
@@ -252,7 +265,7 @@ export default function RecitationPage() {
         </div>
 
         {/* Bottom bar */}
-        <div className="bg-shell-darker px-4 pt-3 pb-4 shrink-0">
+        <div className="bg-shell-darker px-4 pt-1.5 pb-2 shrink-0">
           <WaveformCanvas analyserNode={recorder.analyserNode} />
           <div className="flex justify-between items-center mt-2">
             <span className="text-[11px] text-[#9A7060] font-bold tabular-nums">

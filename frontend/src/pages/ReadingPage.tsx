@@ -117,6 +117,9 @@ export default function ReadingPage() {
   const [pdfLayout, setPdfLayout] = useState<'auto' | 'single'>(() => {
     return (localStorage.getItem(`pdfLayout:${childId ?? 'default'}`) as 'auto' | 'single') || 'auto'
   })
+  const [eyeStripes, setEyeStripes] = useState<boolean>(() => {
+    return localStorage.getItem(`eyeStripes:${childId ?? 'default'}`) === '1'
+  })
 
   // ── Responsive window width ───────────────────────────────────────────────
   const [winWidth, setWinWidth] = useState(() => window.innerWidth)
@@ -132,6 +135,9 @@ export default function ReadingPage() {
   useEffect(() => {
     if (childId) localStorage.setItem(`pdfLayout:${childId}`, pdfLayout)
   }, [pdfLayout, childId])
+  useEffect(() => {
+    if (childId) localStorage.setItem(`eyeStripes:${childId}`, eyeStripes ? '1' : '0')
+  }, [eyeStripes, childId])
 
   // ── PDF area ResizeObserver ───────────────────────────────────────────────
   const pdfAreaRef   = useRef<HTMLDivElement>(null)
@@ -292,6 +298,14 @@ export default function ReadingPage() {
     if (e.clientX - r.left < r.width / 2) goPrev(); else goNext()
   }
 
+  // ── Navigation ────────────────────────────────────────────────────────────
+  const handleGoHome = () => {
+    if (recorder.isRecording) {
+      if (!confirm('正在录音中，确定退出？录音不会保存。')) return
+    }
+    navigate('/')
+  }
+
   // ── Recording ─────────────────────────────────────────────────────────────
   const handleStart = async () => {
     try { await recorder.start() }
@@ -375,8 +389,14 @@ export default function ReadingPage() {
       >
 
         {/* ── Status bar ── */}
-        <div className="bg-shell-dark flex items-center justify-between px-4 py-3 shrink-0 gap-2">
-          <span className="font-black text-[#F5E8DD] shrink-0 leading-tight"
+        <div className="bg-shell-dark flex items-center justify-between px-3 py-1.5 shrink-0 gap-2">
+          <button onClick={handleGoHome}
+            className="text-[#F5E8DD]/70 hover:text-white text-xl shrink-0 px-1
+              active:scale-95 transition-transform"
+            aria-label="返回首页">
+            ←
+          </button>
+          <span className="font-black text-[#F5E8DD] shrink-0 leading-tight truncate min-w-0"
                 style={{ fontSize: namePx }}>
             {child.name}
           </span>
@@ -399,7 +419,7 @@ export default function ReadingPage() {
         </div>
 
         {/* ── PDF zoom / layout toolbar ── */}
-        <div className="bg-cream-pdf flex items-center justify-end gap-2 px-3 py-1.5 shrink-0 border-b border-black/5">
+        <div className="bg-cream-pdf flex items-center justify-center gap-2 px-3 py-1.5 shrink-0 border-b border-black/5">
           <button
             onClick={() => setPdfZoom(z => Math.max(0.5, +(z - 0.1).toFixed(2)))}
             className="w-8 h-8 rounded-lg bg-shell-dark text-white font-extrabold text-sm
@@ -418,6 +438,13 @@ export default function ReadingPage() {
               active:scale-95 transition-transform`}>
             {pdfLayout === 'single' ? '单页' : '双页'}
           </button>
+          <button
+            onClick={() => setEyeStripes(v => !v)}
+            className={`ml-1 px-3 h-8 rounded-lg text-xs font-extrabold
+              ${eyeStripes ? 'bg-mint text-white' : 'bg-shell-dark text-white'}
+              active:scale-95 transition-transform`}>
+            护眼
+          </button>
         </div>
 
         {/* ── PDF area ── */}
@@ -429,46 +456,56 @@ export default function ReadingPage() {
           onTouchEnd={handleTouchEnd}
         >
           {pdfUrl && (
-            <Document
-              file={pdfUrl}
-              onLoadError={(err) => console.error('[PDF onLoadError]', err)}
-              onSourceError={(err) => console.error('[PDF onSourceError]', err)}
-              onLoadSuccess={async (doc) => {
-                setNumPages(doc.numPages); setPage(1)
-                try {
-                  const firstPage = await doc.getPage(1)
-                  const vp = firstPage.getViewport({ scale: 1 })
-                  setAspectRatio(vp.width / vp.height)
-                } catch (_) {}
-                if (doc.numPages === 1) {
-                  const { pool: p, pdfIdx: pi, sessionId: sid } = S.current
-                  reportPdf(p[pi], sid, true, 1, false)
-                }
-              }}
-              loading={<div className="text-brown-mute text-sm mt-20">加载 PDF...</div>}
-              error={<div className="text-red-400 text-sm mt-20">PDF 加载失败</div>}
-            >
-              {showDualPage ? (
-                <div className="flex gap-6 justify-center">
-                  <Page pageNumber={page}   width={finalPageWidth}
-                    renderTextLayer={false} renderAnnotationLayer={false} />
-                  {page + 1 <= numPages && (
-                    <Page pageNumber={page+1} width={finalPageWidth}
+            <div className="relative">
+              <Document
+                file={pdfUrl}
+                onLoadError={(err) => console.error('[PDF onLoadError]', err)}
+                onSourceError={(err) => console.error('[PDF onSourceError]', err)}
+                onLoadSuccess={async (doc) => {
+                  setNumPages(doc.numPages); setPage(1)
+                  try {
+                    const firstPage = await doc.getPage(1)
+                    const vp = firstPage.getViewport({ scale: 1 })
+                    setAspectRatio(vp.width / vp.height)
+                  } catch (_) {}
+                  if (doc.numPages === 1) {
+                    const { pool: p, pdfIdx: pi, sessionId: sid } = S.current
+                    reportPdf(p[pi], sid, true, 1, false)
+                  }
+                }}
+                loading={<div className="text-brown-mute text-sm mt-20">加载 PDF...</div>}
+                error={<div className="text-red-400 text-sm mt-20">PDF 加载失败</div>}
+              >
+                {showDualPage ? (
+                  <div className="flex gap-6 justify-center">
+                    <Page pageNumber={page}   width={finalPageWidth}
                       renderTextLayer={false} renderAnnotationLayer={false} />
-                  )}
-                </div>
-              ) : (
-                <Page pageNumber={page} width={finalPageWidth}
-                  renderTextLayer={false} renderAnnotationLayer={false} />
+                    {page + 1 <= numPages && (
+                      <Page pageNumber={page+1} width={finalPageWidth}
+                        renderTextLayer={false} renderAnnotationLayer={false} />
+                    )}
+                  </div>
+                ) : (
+                  <Page pageNumber={page} width={finalPageWidth}
+                    renderTextLayer={false} renderAnnotationLayer={false} />
+                )}
+              </Document>
+              {eyeStripes && (
+                <div
+                  className="absolute inset-0 pointer-events-none rounded-[4px]"
+                  style={{
+                    backgroundImage: 'repeating-linear-gradient(to bottom, rgba(168, 198, 134, 0) 0px, rgba(168, 198, 134, 0) 24px, rgba(168, 198, 134, 0.18) 24px, rgba(168, 198, 134, 0.18) 48px)'
+                  }}
+                />
               )}
-            </Document>
+            </div>
           )}
 
           <PageDots numPages={numPages} page={page} />
         </div>
 
         {/* ── Record button zone ── */}
-        <div className="bg-shell-dark py-5 flex justify-center items-center shrink-0">
+        <div className="bg-shell-dark py-2 flex justify-center items-center shrink-0">
           <div className="relative flex items-center justify-center">
             {recorder.isRecording && (
               <div className="absolute w-20 h-20 rounded-full bg-peach/25 animate-ping" />
@@ -509,7 +546,7 @@ export default function ReadingPage() {
         </div>
 
         {/* ── Bottom bar ── */}
-        <div className="bg-shell-darker px-4 pt-3 pb-4 shrink-0">
+        <div className="bg-shell-darker px-4 pt-1.5 pb-2 shrink-0">
           <WaveformCanvas analyserNode={recorder.analyserNode} />
           <div className="flex justify-between items-center mt-2">
             <span className="text-[11px] text-[#9A7060] font-bold tabular-nums">
