@@ -15,11 +15,6 @@ interface Config   {
   min_duration_s: string; max_consecutive_silence_s: string
 }
 
-function getCurrentHHMM() {
-  const d = new Date()
-  return `${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`
-}
-
 function fmtTime(s: number) {
   return `${Math.floor(s/60).toString().padStart(2,'0')}:${Math.floor(s%60).toString().padStart(2,'0')}`
 }
@@ -68,7 +63,7 @@ function WaveformCanvas({ analyserNode, className }: { analyserNode: AnalyserNod
     return () => cancelAnimationFrame(rafRef.current)
   }, [analyserNode])
 
-  return <canvas ref={canvasRef} width={600} height={40} className={className ?? 'w-full h-10 rounded-[8px]'} />
+  return <canvas ref={canvasRef} width={600} height={24} className={className ?? 'w-full h-6 rounded-[8px]'} />
 }
 
 // ── Page indicator dots ───────────────────────────────────────────────────────
@@ -106,7 +101,6 @@ export default function ReadingPage() {
   const [numPages,     setNumPages]     = useState(0)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error,        setError]        = useState('')
-  const [nowHHMM,      setNowHHMM]      = useState(getCurrentHHMM)
   const [aspectRatio,  setAspectRatio]  = useState(0.707)  // PDF page w/h, default A4 portrait
 
   // PDF zoom + layout preferences (persisted per child)
@@ -186,12 +180,6 @@ export default function ReadingPage() {
   // ── Recorder ─────────────────────────────────────────────────────────────
   const maxSilenceS = config ? parseInt(config.max_consecutive_silence_s) : 15
   const recorder    = useReadingRecorder({ maxConsecutiveSilenceS: maxSilenceS })
-
-  // Clock tick
-  useEffect(() => {
-    const t = setInterval(() => setNowHHMM(getCurrentHHMM()), 60_000)
-    return () => clearInterval(t)
-  }, [])
 
   const sessionStartedRef = useRef(false)
 
@@ -346,13 +334,11 @@ export default function ReadingPage() {
   // ── Other derived values ──────────────────────────────────────────────────
   const currentPdf = pool[pdfIdx]
   const pdfUrl     = currentPdf ? `/api/library/${currentPdf.library_id}/file` : null
-  const inWindow   = config ? (nowHHMM >= config.window_start && nowHHMM < config.window_end) : null
   const minDurS    = child?.min_duration_s != null ? child.min_duration_s : (config ? parseInt(config.min_duration_s) : 300)
   const remainingS = Math.max(0, minDurS - recorder.durationS)
   const pdfShort   = currentPdf?.pdf_filename.split('/').pop() ?? ''
   const fontScale  = child?.font_scale ?? 1.0
-  const namePx     = Math.round(20 * fontScale)   // status bar name size
-  const btnTextPx  = Math.round(13 * fontScale)   // recording button text
+  const namePx     = Math.round(20 * fontScale)
 
   const voiceColor =
     recorder.voiceStatus === 'long_pause' ? 'text-red-400' :
@@ -407,14 +393,9 @@ export default function ReadingPage() {
           </div>
 
           <div className="text-right shrink-0">
-            <span className={`block text-[20px] font-black tabular-nums ${remainingS === 0 ? 'text-mint' : 'text-white'}`}>
+            <span className={`block text-[18px] font-black tabular-nums leading-none ${remainingS === 0 ? 'text-mint' : 'text-white'}`}>
               {remainingS === 0 ? '已达标' : fmtTime(remainingS)}
             </span>
-            {inWindow !== null && (
-              <span className={`text-[11px] font-bold ${inWindow ? 'text-mint' : 'text-yellow-400'}`}>
-                {inWindow ? '✓ 打卡时间' : '⚠ 时间窗外'}
-              </span>
-            )}
           </div>
         </div>
 
@@ -504,47 +485,45 @@ export default function ReadingPage() {
           <PageDots numPages={numPages} page={page} />
         </div>
 
-        {/* ── 合并控制条：波形按钮 + 计时统计 ── */}
+        {/* ── 合并控制条（播放器风）：圆形按钮 + 横向波形 + 计时 ── */}
         <div className="bg-shell-dark px-3 py-2 flex items-center gap-3 shrink-0">
-          {/* 主按钮：椭圆胶囊，波形作背景，文字 z-10 叠加 */}
+          {/* 左：圆形录音按钮 */}
           <button
             onClick={recorder.isRecording ? handleSubmit : handleStart}
             disabled={isSubmitting || (!recorder.isRecording && !sessionId)}
-            className={`flex-1 relative h-10 rounded-full overflow-hidden
+            className={`w-10 h-10 rounded-full shrink-0 flex items-center justify-center
               ${recorder.isRecording
-                ? 'bg-gradient-to-br from-[#C54B38] to-[#9A2F1C]'
+                ? 'bg-gradient-to-br from-[#C54B38] to-[#9A2F1C] ring-2 ring-white/40 animate-pulse'
                 : 'bg-gradient-to-br from-peach to-[#C05030]'}
-              shadow-[0_4px_16px_rgba(224,122,95,0.45)]
-              border-2 border-white/20
-              active:scale-[0.98] transition-transform
+              shadow-[0_2px_10px_rgba(224,122,95,0.55)]
+              border-2 border-white/30
+              active:scale-95 transition-transform
               disabled:opacity-40`}
+            aria-label={recorder.isRecording ? '停止并提交' : '开始朗读'}
           >
-            {recorder.isRecording && (
-              <WaveformCanvas
-                analyserNode={recorder.analyserNode}
-                className="absolute inset-0 w-full h-full opacity-50"
-              />
+            {recorder.isRecording ? (
+              <span className="block w-3 h-3 bg-white rounded-[2px]" />
+            ) : (
+              <span className="block w-3 h-3 bg-white rounded-full" />
             )}
-            {recorder.isRecording && (
-              <span className="absolute inset-0 rounded-full ring-2 ring-white/30 animate-pulse pointer-events-none" />
-            )}
-            <span className="relative z-10 text-white font-extrabold tracking-wider"
-              style={{ fontSize: btnTextPx }}>
-              {recorder.isRecording ? '停止并提交' : '开始朗读'}
-            </span>
           </button>
 
-          {/* 计时 + 状态：紧凑两行 */}
+          {/* 中：横向波形（占满剩余宽度） */}
+          <div className="flex-1 min-w-0 flex items-center">
+            <WaveformCanvas
+              analyserNode={recorder.analyserNode}
+              className="w-full h-5 opacity-80"
+            />
+          </div>
+
+          {/* 右：计时 + 状态（紧凑两行） */}
           <div className="text-right shrink-0 leading-tight">
-            <p className="text-[11px] text-[#F5E8DD] tabular-nums font-bold">
+            <p className="text-[12px] text-[#F5E8DD] tabular-nums font-extrabold">
               {fmtTime(recorder.durationS)}
             </p>
-            <p className={`text-[10px] font-bold ${voiceColor}`}>{voiceLabel}</p>
-            {recorder.silenceCount > 0 && (
-              <p className="text-[9px] text-brown-mute">
-                停顿 {recorder.silenceCount} · {Math.round(recorder.totalSilenceS)}s
-              </p>
-            )}
+            <p className={`text-[10px] font-bold ${voiceColor}`}>
+              {recorder.isRecording ? voiceLabel : '未开始'}
+            </p>
           </div>
         </div>
 

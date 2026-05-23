@@ -6,11 +6,6 @@ interface Child  { id: string; name: string; font_scale: number }
 interface Plan   { id: number; pdf_filename: string; status: string }
 interface Config { window_start: string; window_end: string; min_duration_s: string; max_consecutive_silence_s: string }
 
-function getCurrentHHMM() {
-  const d = new Date()
-  return `${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`
-}
-
 function fmtTime(s: number) {
   return `${Math.floor(s/60).toString().padStart(2,'0')}:${Math.floor(s%60).toString().padStart(2,'0')}`
 }
@@ -57,7 +52,7 @@ function WaveformCanvas({ analyserNode, className }: { analyserNode: AnalyserNod
     return () => cancelAnimationFrame(rafRef.current)
   }, [analyserNode])
 
-  return <canvas ref={canvasRef} width={600} height={40} className={className ?? 'w-full h-10 rounded-[8px]'} />
+  return <canvas ref={canvasRef} width={600} height={24} className={className ?? 'w-full h-6 rounded-[8px]'} />
 }
 
 export default function RecitationPage() {
@@ -71,12 +66,6 @@ export default function RecitationPage() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error,        setError]        = useState('')
   const [noplan,       setNoplan]       = useState(false)
-  const [nowHHMM,      setNowHHMM]      = useState(getCurrentHHMM)
-
-  useEffect(() => {
-    const t = setInterval(() => setNowHHMM(getCurrentHHMM()), 60_000)
-    return () => clearInterval(t)
-  }, [])
 
   const sessionStartedRef = useRef(false)
 
@@ -153,9 +142,7 @@ export default function RecitationPage() {
 
   const fontScale  = child?.font_scale ?? 1.0
   const namePx     = Math.round(20 * fontScale)
-  const btnTextPx  = Math.round(13 * fontScale)
   const bookTitle  = plan?.pdf_filename.split('/').pop()?.replace('.pdf', '') ?? ''
-  const inWindow   = config ? (nowHHMM >= config.window_start && nowHHMM < config.window_end) : null
   const halfMin    = config ? Math.floor(parseInt(config.min_duration_s) / 2) : 150
   const remainingS = Math.max(0, halfMin - recorder.durationS)
 
@@ -202,14 +189,9 @@ export default function RecitationPage() {
             <p className="text-[12px] text-[#C09A80] font-bold">背诵考核</p>
           </div>
           <div className="text-right shrink-0">
-            <span className={`block text-[20px] font-black tabular-nums ${remainingS === 0 ? 'text-mint' : 'text-white'}`}>
+            <span className={`block text-[18px] font-black tabular-nums leading-none ${remainingS === 0 ? 'text-mint' : 'text-white'}`}>
               {remainingS === 0 ? '已达标' : fmtTime(remainingS)}
             </span>
-            {inWindow !== null && (
-              <span className={`text-[11px] font-bold ${inWindow ? 'text-mint' : 'text-yellow-400'}`}>
-                {inWindow ? '✓ 打卡时间' : '⚠ 时间窗外'}
-              </span>
-            )}
           </div>
         </div>
 
@@ -223,45 +205,42 @@ export default function RecitationPage() {
           </div>
         </div>
 
-        {/* ── 合并控制条：波形按钮 + 计时统计 ── */}
+        {/* ── 合并控制条（播放器风）：圆形按钮 + 横向波形 + 计时 ── */}
         <div className="bg-shell-dark px-3 py-2 flex items-center gap-3 shrink-0">
           <button
             onClick={recorder.isRecording ? handleSubmit : handleStart}
             disabled={isSubmitting || (!recorder.isRecording && !sessionId)}
-            className={`flex-1 relative h-10 rounded-full overflow-hidden
+            className={`w-10 h-10 rounded-full shrink-0 flex items-center justify-center
               ${recorder.isRecording
-                ? 'bg-gradient-to-br from-[#C54B38] to-[#9A2F1C]'
+                ? 'bg-gradient-to-br from-[#C54B38] to-[#9A2F1C] ring-2 ring-white/40 animate-pulse'
                 : 'bg-gradient-to-br from-peach to-[#C05030]'}
-              shadow-[0_4px_16px_rgba(224,122,95,0.45)]
-              border-2 border-white/20
-              active:scale-[0.98] transition-transform
+              shadow-[0_2px_10px_rgba(224,122,95,0.55)]
+              border-2 border-white/30
+              active:scale-95 transition-transform
               disabled:opacity-40`}
+            aria-label={recorder.isRecording ? '停止并提交' : '开始背诵'}
           >
-            {recorder.isRecording && (
-              <WaveformCanvas
-                analyserNode={recorder.analyserNode}
-                className="absolute inset-0 w-full h-full opacity-50"
-              />
+            {recorder.isRecording ? (
+              <span className="block w-3 h-3 bg-white rounded-[2px]" />
+            ) : (
+              <span className="block w-3 h-3 bg-white rounded-full" />
             )}
-            {recorder.isRecording && (
-              <span className="absolute inset-0 rounded-full ring-2 ring-white/30 animate-pulse pointer-events-none" />
-            )}
-            <span className="relative z-10 text-white font-extrabold tracking-wider"
-              style={{ fontSize: btnTextPx }}>
-              {recorder.isRecording ? '停止并提交' : '开始背诵'}
-            </span>
           </button>
 
+          <div className="flex-1 min-w-0 flex items-center">
+            <WaveformCanvas
+              analyserNode={recorder.analyserNode}
+              className="w-full h-5 opacity-80"
+            />
+          </div>
+
           <div className="text-right shrink-0 leading-tight">
-            <p className="text-[11px] text-[#F5E8DD] tabular-nums font-bold">
+            <p className="text-[12px] text-[#F5E8DD] tabular-nums font-extrabold">
               {fmtTime(recorder.durationS)}
             </p>
-            <p className={`text-[10px] font-bold ${voiceColor}`}>{voiceLabel}</p>
-            {recorder.silenceCount > 0 && (
-              <p className="text-[9px] text-brown-mute">
-                停顿 {recorder.silenceCount} · {Math.round(recorder.totalSilenceS)}s
-              </p>
-            )}
+            <p className={`text-[10px] font-bold ${voiceColor}`}>
+              {recorder.isRecording ? voiceLabel : '未开始'}
+            </p>
           </div>
         </div>
       </div>
