@@ -133,6 +133,19 @@ export default function HomePage() {
   const [recitationPlans, setRecitationPlans] = useState<Record<string, RecPlan | null>>({})
   const [config,          setConfig]          = useState<Config | null>(null)
   const [error,           setError]           = useState('')
+  const [authMe,          setAuthMe]          = useState<{ email: string; is_superadmin: boolean } | null>(null)
+
+  useEffect(() => {
+    fetch('/api/auth/me')
+      .then(r => r.ok ? r.json() : null)
+      .then(setAuthMe)
+      .catch(() => setAuthMe(null))
+  }, [])
+
+  const handleLogout = async () => {
+    await fetch('/api/auth/logout', { method: 'POST' })
+    setAuthMe(null)
+  }
 
   useEffect(() => {
     Promise.all([
@@ -162,6 +175,18 @@ export default function HomePage() {
       <h1 className="text-[30px] font-extrabold text-brown-text tracking-tight mb-8">
         Morning Reader
       </h1>
+
+      {/* 账户区 */}
+      <div className="w-full max-w-3xl mb-4 flex justify-end items-center gap-3 text-sm">
+        {authMe ? (
+          <>
+            <span className="text-brown-mute">已登录 <span className="font-extrabold text-brown-text">{authMe.email}</span>{authMe.is_superadmin ? ' 👑' : ''}</span>
+            <button onClick={handleLogout} className="text-peach hover:text-peach-deep font-bold">退出</button>
+          </>
+        ) : (
+          <Link to="/login" className="text-peach hover:text-peach-deep font-bold">登录</Link>
+        )}
+      </div>
 
       {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
       {children.length === 0 && !error && (

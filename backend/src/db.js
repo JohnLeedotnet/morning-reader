@@ -3,6 +3,9 @@ const path = require('path');
 
 const DB_PATH = path.join(__dirname, '../../data/morning-reader.db');
 const db = new Database(DB_PATH);
+db.pragma('journal_mode = WAL')
+db.pragma('busy_timeout = 5000')
+db.pragma('foreign_keys = ON')
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS children (
@@ -100,5 +103,150 @@ for (const [key, value] of [
 }
 
 db.prepare("UPDATE children SET pdf_dir = (SELECT value FROM config WHERE key='pdf_dir') WHERE pdf_dir IS NULL").run()
+
+// ── Sprint 0A: 多租户底座 + 公共图书馆 ──────────────
+
+// 账户表（家庭单元）
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS accounts (
+      id                INTEGER PRIMARY KEY AUTOINCREMENT,
+      email             TEXT UNIQUE,
+      parent_pin_hash   TEXT,
+      is_anonymous      INTEGER DEFAULT 0,
+      is_superadmin     INTEGER DEFAULT 0,
+      storage_used_mb   INTEGER DEFAULT 0,
+      storage_quota_mb  INTEGER DEFAULT 200,
+      created_at        TEXT DEFAULT (datetime('now')),
+      last_active_at    TEXT DEFAULT (datetime('now'))
+    )
+  `)
+} catch (e) { console.error('create accounts:', e.message) }
+
+// 公共 PDF 图书馆
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS pdf_library (
+      id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+      sha256                TEXT UNIQUE NOT NULL,
+      filename              TEXT NOT NULL,
+      title                 TEXT,
+      size_bytes            INTEGER,
+      uploader_account_id   INTEGER REFERENCES accounts(id),
+      is_private            INTEGER DEFAULT 0,
+      is_builtin            INTEGER DEFAULT 0,
+      read_count            INTEGER DEFAULT 0,
+      created_at            TEXT DEFAULT (datetime('now'))
+    )
+  `)
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_pdf_library_public ON pdf_library(is_private, created_at DESC)`)
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_pdf_library_uploader ON pdf_library(uploader_account_id)`)
+} catch (e) { console.error('create pdf_library:', e.message) }
+
+// 登录会话
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS auth_sessions (
+      token       TEXT PRIMARY KEY,
+      account_id  INTEGER NOT NULL REFERENCES accounts(id),
+      expires_at  TEXT NOT NULL,
+      created_at  TEXT DEFAULT (datetime('now')),
+      created_ip  TEXT
+    )
+  `)
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_auth_sessions_account ON auth_sessions(account_id)`)
+} catch (e) { console.error('create auth_sessions:', e.message) }
+
+// 家长解锁会话
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS parent_sessions (
+      token       TEXT PRIMARY KEY,
+      account_id  INTEGER NOT NULL REFERENCES accounts(id),
+      expires_at  TEXT NOT NULL,
+      created_at  TEXT DEFAULT (datetime('now'))
+    )
+  `)
+} catch (e) { console.error('create parent_sessions:', e.message) }
+
+// 邮箱魔法链接
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS magic_links (
+      token       TEXT PRIMARY KEY,
+      email       TEXT NOT NULL,
+      expires_at  TEXT NOT NULL,
+      used        INTEGER DEFAULT 0,
+      created_at  TEXT DEFAULT (datetime('now'))
+    )
+  `)
+} catch (e) { console.error('create magic_links:', e.message) }
+
+// 匿名 token 追踪
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS anonymous_tokens (
+      token       TEXT PRIMARY KEY,
+      first_seen  TEXT DEFAULT (datetime('now')),
+      last_seen   TEXT DEFAULT (datetime('now'))
+    )
+  `)
+} catch (e) { console.error('create anonymous_tokens:', e.message) }
+
+// 既有表加 account_id（保留旧字段不删）
+try { db.exec('ALTER TABLE children ADD COLUMN account_id INTEGER REFERENCES accounts(id)') } catch (e) {}
+try { db.exec('ALTER TABLE children ADD COLUMN cursor_library_id INTEGER REFERENCES pdf_library(id)') } catch (e) {}
+try { db.exec('ALTER TABLE reading_sessions ADD COLUMN account_id INTEGER REFERENCES accounts(id)') } catch (e) {}
+try { db.exec('ALTER TABLE reading_sessions ADD COLUMN created_by_token TEXT') } catch (e) {}
+try { db.exec('ALTER TABLE recitation_plans ADD COLUMN account_id INTEGER REFERENCES accounts(id)') } catch (e) {}
+try { db.exec('ALTER TABLE pdf_reads ADD COLUMN account_id INTEGER REFERENCES accounts(id)') } catch (e) {}
+try { db.exec('ALTER TABLE pdf_reads ADD COLUMN pdf_library_id INTEGER REFERENCES pdf_library(id)') } catch (e) {}
+
+// 索引（加速 account 范围查询）
+try { db.exec('CREATE INDEX IF NOT EXISTS idx_children_account ON children(account_id)') } catch (e) {}
+try { db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_account_date ON reading_sessions(account_id, date)') } catch (e) {}
+try { db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_created_by ON reading_sessions(created_by_token)') } catch (e) {}
+
+// 初始数据：Homer 自家 account_id=1（is_superadmin），并 backfill 所有 children/sessions 到此 account
+try {
+  const existing = db.prepare("SELECT id FROM accounts WHERE id=1").get()
+  if (!existing) {
+    db.prepare(`
+      INSERT INTO accounts (id, email, is_superadmin, storage_quota_mb)
+      VALUES (1, NULL, 1, 100000)
+    `).run()
+    db.exec('UPDATE children SET account_id=1 WHERE account_id IS NULL')
+    db.exec('UPDATE reading_sessions SET account_id=1 WHERE account_id IS NULL')
+    db.exec('UPDATE recitation_plans SET account_id=1 WHERE account_id IS NULL')
+    db.exec('UPDATE pdf_reads SET account_id=1 WHERE account_id IS NULL')
+    console.log('[Sprint 0A] Created Homer family account id=1 and backfilled existing data')
+  }
+} catch (e) { console.error('seed homer account:', e.message) }
+
+// 匿名 account（独立 id，记到 config 表）
+try {
+  const cfg = db.prepare("SELECT value FROM config WHERE key='anonymous_account_id'").get()
+  if (!cfg) {
+    const result = db.prepare(`
+      INSERT INTO accounts (email, is_anonymous, storage_quota_mb)
+      VALUES (NULL, 1, 0)
+    `).run()
+    db.prepare("INSERT OR REPLACE INTO config (key, value) VALUES ('anonymous_account_id', ?)")
+      .run(String(result.lastInsertRowid))
+    console.log('[Sprint 0A] Created anonymous account id=' + result.lastInsertRowid)
+  }
+} catch (e) { console.error('seed anonymous account:', e.message) }
+
+// Sprint 1A: accounts.email 唯一索引（幂等）
+try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_email ON accounts(email) WHERE email IS NOT NULL') } catch (e) {}
+
+// Sprint 1A: Homer 自家 account_id=1 设 email（如已设则不变）
+try {
+  const row = db.prepare('SELECT email FROM accounts WHERE id = 1').get()
+  if (row && !row.email) {
+    db.prepare("UPDATE accounts SET email = 'lijhm@protonmail.com' WHERE id = 1").run()
+    console.log('[Sprint 1A] Set Homer account_id=1 email')
+  }
+} catch (e) { console.error('Sprint 1A email seed:', e.message) }
 
 module.exports = db;

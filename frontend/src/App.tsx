@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import HomePage from './pages/HomePage'
+import LoginPage from './pages/LoginPage'
 import MicTest from './pages/MicTest'
 import PdfTest from './pages/PdfTest'
 import ReadingPage from './pages/ReadingPage'
@@ -15,6 +16,7 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<HomePage />} />
+        <Route path="/login" element={<LoginPage />} />
         <Route path="/discarded" element={<DiscardedPage />} />
         <Route path="/reading/:childId" element={<ReadingPage />} />
         <Route path="/recitation/:childId" element={<RecitationPage />} />

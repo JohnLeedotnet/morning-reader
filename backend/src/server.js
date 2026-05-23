@@ -8,6 +8,8 @@ const multer = require('multer');
 
 const db = require('./db');
 const adminAuth = require('./adminAuth');
+const cookieParser = require('cookie-parser');
+const auth = require('./authMagicLink');
 
 const app = express();
 const PORT = 3001;
@@ -30,6 +32,7 @@ function todayLocal() {
 
 app.use(cors());
 app.use(express.json());
+app.use(cookieParser());
 
 function getTodayPool(childId) {
   const child = db.prepare('SELECT cursor_library_id, daily_count FROM children WHERE id = ?').get(childId);
@@ -54,6 +57,60 @@ function getConfig() {
     return acc;
   }, {});
 }
+
+// ── Sprint 1A: Magic-link auth ────────────────────────────────────────────────
+
+// 发起魔法链接（不暴露 email 是否已注册，防 enumeration）
+app.post('/api/auth/magic-link/request', (req, res) => {
+  try {
+    const { email } = req.body
+    if (!email) return res.status(400).json({ error: 'email required' })
+    const baseUrl = process.env.PUBLIC_BASE_URL || 'https://www.morningreader.org'
+    auth.requestMagicLink(db, email, baseUrl)
+    res.json({ ok: true })
+  } catch (err) {
+    // 任何错误统一返回成功，防止 email enumeration
+    console.warn('[magic-link/request] suppressed error:', err.message)
+    res.json({ ok: true })
+  }
+})
+
+// 验证 → 设 cookie → redirect 到首页
+app.get('/api/auth/magic-link/verify', (req, res) => {
+  try {
+    const { token } = req.query
+    if (!token) return res.status(400).send('token required')
+    const { sessionToken, sessionExpiresAt } = auth.verifyMagicLink(db, token, req.ip)
+    res.cookie('auth_token', sessionToken, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: req.protocol === 'https',
+      expires: new Date(sessionExpiresAt),
+    })
+    res.redirect('/')
+  } catch (err) {
+    res.status(400).send(`Login failed: ${err.message}. <a href="/login">Try again</a>`)
+  }
+})
+
+// 当前已登录用户信息
+app.get('/api/auth/me', (req, res) => {
+  const session = auth.getCurrentSession(db, req.cookies?.auth_token)
+  if (!session) return res.status(401).json({ error: 'not authenticated' })
+  res.json({
+    account_id: session.account_id,
+    email: session.email,
+    is_superadmin: session.is_superadmin === 1,
+    is_anonymous: session.is_anonymous === 1,
+  })
+})
+
+// 登出
+app.post('/api/auth/logout', (req, res) => {
+  auth.deleteSession(db, req.cookies?.auth_token)
+  res.clearCookie('auth_token')
+  res.json({ ok: true })
+})
 
 // ── Sprint 0 routes ───────────────────────────────────────────────────────────
 
