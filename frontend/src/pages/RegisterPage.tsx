@@ -41,7 +41,7 @@ export default function RegisterPage() {
         <p className="text-sm text-brown-mute mb-6 text-center">填写后立即可用</p>
 
         <form onSubmit={handleSubmit} className="space-y-3">
-          <input type="email" required placeholder="邮箱（如 you@example.com）" value={email} onChange={e => setEmail(e.target.value)}
+          <input type="email" required placeholder="注册邮箱，仅用于找回密码" value={email} onChange={e => setEmail(e.target.value)}
             className="w-full bg-cream rounded-[10px] px-4 py-3 text-brown-text border-2 border-transparent focus:border-peach outline-none" />
           <input type="text" required placeholder="用户名（3-32 位，字母/数字/_/-）" value={username} onChange={e => setUsername(e.target.value)}
             pattern="[a-zA-Z0-9_-]{3,32}"

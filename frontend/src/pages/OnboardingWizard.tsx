@@ -55,11 +55,13 @@ export default function OnboardingWizard({ authMe: _authMe, onDone }: Props) {
   const submitPin = async () => {
     setSubmitting(true); setPinError('')
     try {
-      if (!/^\d{4,8}$/.test(newPin)) throw new Error('PIN 必须 4-8 位数字')
+      // 留空默认 "0000"
+      const finalPin = newPin.trim() === '' ? '0000' : newPin
+      if (!/^\d{4,8}$/.test(finalPin)) throw new Error('PIN 必须 4-8 位数字')
       const res = await fetch('/api/auth/set-pin', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ newPin }),
+        body: JSON.stringify({ newPin: finalPin }),
       })
       if (!res.ok) {
         const d = await res.json().catch(() => ({})) as { error?: string }
@@ -192,8 +194,9 @@ export default function OnboardingWizard({ authMe: _authMe, onDone }: Props) {
                 className="w-full bg-cream rounded-[10px] px-4 py-3 text-2xl text-center tracking-[8px]
                   tabular-nums font-extrabold border-2 border-transparent focus:border-peach outline-none mb-3"
               />
+              <p className="text-xs text-brown-faint mt-2 mb-3">留空将使用默认 PIN "0000"，建议日后在用户设置里修改</p>
               {pinError && <p className="text-red-500 text-sm mb-3">{pinError}</p>}
-              <button onClick={submitPin} disabled={submitting || newPin.length < 4}
+              <button onClick={submitPin} disabled={submitting}
                 className="w-full bg-peach text-white font-extrabold py-3 rounded-[12px] disabled:opacity-40">
                 {submitting ? '保存中...' : '下一步'}
               </button>

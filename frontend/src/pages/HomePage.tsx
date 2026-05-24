@@ -246,24 +246,46 @@ export default function HomePage() {
 
   if (authMe === null) {
     return (
-      <div className="min-h-screen bg-cream flex flex-col items-center justify-center p-8">
-        <div className="bg-white rounded-[24px] p-10 max-w-md w-full shadow-[0_4px_24px_rgba(224,122,95,0.10)] text-center">
-          <h1 className="text-3xl font-black text-brown-text mb-3">🌅 Morning Reader</h1>
-          <p className="text-brown-mute text-sm mb-6 leading-relaxed">
-            家庭晨读管理工具<br />
-            家长监督孩子英文朗读 + 录音 + 审核
-          </p>
-          <div className="flex gap-3 justify-center">
-            <Link to="/login" className="inline-block bg-peach text-white font-extrabold px-6 py-3 rounded-[14px] hover:opacity-90 transition-opacity">
-              登录
-            </Link>
-            <Link to="/register" className="inline-block bg-shell-dark text-white font-extrabold px-6 py-3 rounded-[14px] hover:opacity-90 transition-opacity">
-              注册
-            </Link>
+      <div className="min-h-screen bg-cream flex items-center justify-center p-4">
+        <div className="bg-white rounded-[24px] p-8 sm:p-10 max-w-2xl w-full shadow-[0_4px_24px_rgba(224,122,95,0.10)]">
+          <div className="text-center mb-8">
+            <h1 className="text-3xl sm:text-4xl font-black text-brown-text mb-3">🌅 Morning Reader</h1>
+            <p className="text-brown-mute text-base">家庭晨读管理工具</p>
           </div>
-          <p className="text-[11px] text-brown-faint mt-6">
-            输入邮箱即可，无需密码
-          </p>
+
+          <div className="space-y-5 mb-8 text-sm text-brown-text leading-relaxed">
+            <div className="bg-cream/60 rounded-[12px] p-4">
+              <h3 className="font-extrabold text-base mb-2">📖 它能做什么</h3>
+              <ul className="space-y-1 ml-4 list-disc">
+                <li>系统自动录音并检测有效性（时长、停顿、静音占比）</li>
+                <li>家长在管理面板审核、判断录音是否合格</li>
+                <li>每两周一次背诵考核，通过后自动前进到下一本书</li>
+                <li>支持牛津阅读树、ESL Podcast 等公共图书馆 PDF</li>
+              </ul>
+            </div>
+
+            <div className="bg-cream/60 rounded-[12px] p-4">
+              <h3 className="font-extrabold text-base mb-2">👨‍👩‍👧 怎么用</h3>
+              <ol className="space-y-1 ml-4 list-decimal">
+                <li><strong>一个家庭一个账号</strong>，邮箱注册即可</li>
+                <li>家长完成首次设置：添加孩子角色 + 选 PDF + 配置朗读要求</li>
+                <li><strong>孩子使用朗读页</strong>，只看到自己的卡片，无需登录</li>
+                <li><strong>家长用 PIN 解锁</strong>用户设置，管理朗读要求、审核录音、修改密码等</li>
+                <li>多个孩子共享同一账号，每个孩子独立配置</li>
+              </ol>
+            </div>
+
+            <div className="bg-cream/60 rounded-[12px] p-4">
+              <h3 className="font-extrabold text-base mb-2">🔒 隐私</h3>
+              <p>每个家庭账号的角色、录音、配置完全隔离，其他账号无法访问。</p>
+            </div>
+          </div>
+
+          <div className="flex gap-3 justify-center">
+            <Link to="/login" className="inline-block bg-peach text-white font-extrabold px-8 py-3 rounded-[14px] hover:opacity-90 transition-opacity">登录</Link>
+            <Link to="/register" className="inline-block bg-shell-dark text-white font-extrabold px-8 py-3 rounded-[14px] hover:opacity-90 transition-opacity">注册新家庭</Link>
+          </div>
+          <p className="text-xs text-brown-faint mt-6 text-center">邮箱注册，无需手机号，亲友间使用</p>
         </div>
       </div>
     )
@@ -291,13 +313,18 @@ export default function HomePage() {
       </h1>
 
       {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
-      {children.length === 0 && !error && (
+      {!childrenLoaded && !error && (
         <p className="text-brown-mute text-sm">加载中...</p>
       )}
+      {childrenLoaded && children.length === 0 && !error && (
+        <p className="text-brown-mute text-sm">未设置朗读要求</p>
+      )}
 
-      <div className="w-full max-w-3xl grid grid-cols-1 sm:grid-cols-2 gap-5">
+      <div className="w-full max-w-3xl flex flex-wrap justify-center gap-5">
         {children.map(child => (
-          <ChildCard key={child.id} child={child} recitationPlan={recitationPlans[child.id] ?? null} config={config} />
+          <div key={child.id} className="w-full sm:w-[calc(50%-10px)] max-w-md">
+            <ChildCard child={child} recitationPlan={recitationPlans[child.id] ?? null} config={config} />
+          </div>
         ))}
       </div>
 

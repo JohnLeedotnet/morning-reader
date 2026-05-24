@@ -149,8 +149,9 @@ export default function ReadingPage() {
   }, [child, config, pool.length])
 
   // ── Derived layout ────────────────────────────────────────────────────────
-  // Dual page: user didn't force single, not on cover, and screen wide enough
-  const showDualPage = pdfLayout !== 'single' && page !== 1 && winWidth >= 768
+  // Dual page: user didn't force single, not on cover/back cover, and screen wide enough
+  const isLastPage = numPages > 0 && page >= numPages
+  const showDualPage = pdfLayout !== 'single' && page !== 1 && !isLastPage && winWidth >= 768
 
   // Frame max-width class
   const frameMaxW =
