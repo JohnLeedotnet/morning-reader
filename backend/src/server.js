@@ -506,6 +506,95 @@ app.get('/api/sessions/:id', (req, res) => {
   }
 });
 
+// ── Sprint 1B: 家长会话端点 ───────────────────────────────────────────────────
+
+// 输 PIN 解锁家长 → 发 parent_session cookie
+app.post('/api/auth/parent-unlock', (req, res) => {
+  try {
+    const userSession = auth.getCurrentSession(db, req.cookies?.auth_token)
+    if (!userSession) return res.status(401).json({ error: 'login required first' })
+    const { pin } = req.body
+    if (!pin) return res.status(400).json({ error: 'pin required' })
+    if (!auth.verifyParentPin(db, userSession.account_id, pin)) {
+      return res.status(401).json({ error: 'invalid pin' })
+    }
+    const { token, expiresAt } = auth.createParentSession(db, userSession.account_id)
+    res.cookie('parent_token', token, {
+      httpOnly: true, sameSite: 'lax',
+      secure: req.protocol === 'https',
+      expires: new Date(expiresAt),
+    })
+    res.json({ ok: true, expiresAt })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// 查询当前家长解锁状态
+app.get('/api/auth/parent-status', (req, res) => {
+  const userSession = auth.getCurrentSession(db, req.cookies?.auth_token)
+  if (!userSession) return res.json({ logged_in: false, parent_unlocked: false, has_pin: false })
+  const parentSession = auth.getCurrentParentSession(db, req.cookies?.parent_token)
+  const unlocked = !!(parentSession && parentSession.account_id === userSession.account_id)
+  const acct = db.prepare('SELECT parent_pin_hash FROM accounts WHERE id = ?').get(userSession.account_id)
+  res.json({
+    logged_in: true,
+    parent_unlocked: unlocked,
+    has_pin: !!(acct?.parent_pin_hash),
+    parent_expires_at: unlocked ? parentSession.expires_at : null,
+  })
+})
+
+// 家长锁屏（清 parent_session）
+app.post('/api/auth/parent-lock', (req, res) => {
+  auth.deleteParentSession(db, req.cookies?.parent_token)
+  res.clearCookie('parent_token')
+  res.json({ ok: true })
+})
+
+// 设置/修改 PIN（需要已登录；首次设置不要求旧 PIN）
+app.post('/api/auth/set-pin', (req, res) => {
+  try {
+    const userSession = auth.getCurrentSession(db, req.cookies?.auth_token)
+    if (!userSession) return res.status(401).json({ error: 'login required' })
+    const { newPin, oldPin } = req.body
+    if (!newPin) return res.status(400).json({ error: 'newPin required' })
+    const acct = db.prepare('SELECT parent_pin_hash FROM accounts WHERE id = ?').get(userSession.account_id)
+    if (acct?.parent_pin_hash) {
+      if (!oldPin || !auth.verifyParentPin(db, userSession.account_id, oldPin)) {
+        return res.status(401).json({ error: 'old PIN incorrect' })
+      }
+    }
+    auth.setParentPin(db, userSession.account_id, newPin)
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+// Sprint 1B: 家长解锁中间件（cookie 优先，X-Admin-Pin fallback 兼容期）
+function requireParent(req, res, next) {
+  const userSession = auth.getCurrentSession(db, req.cookies?.auth_token)
+  const parentSession = auth.getCurrentParentSession(db, req.cookies?.parent_token)
+  if (parentSession && userSession && parentSession.account_id === userSession.account_id) {
+    req.accountId = userSession.account_id
+    req.parentUnlocked = true
+    return next()
+  }
+  // Fallback: 老 X-Admin-Pin header（兼容期）
+  const pin = req.headers['x-admin-pin'] || req.body?.pin || req.query?.pin
+  if (pin) {
+    if (auth.verifyParentPin(db, 1, pin)) {
+      req.accountId = 1; req.parentUnlocked = true; return next()
+    }
+    const cfg = db.prepare("SELECT value FROM config WHERE key = 'parent_pin'").get()
+    if (cfg && cfg.value && cfg.value === String(pin)) {
+      req.accountId = 1; req.parentUnlocked = true; return next()
+    }
+  }
+  return res.status(401).json({ error: 'parent unlock required' })
+}
+
 // ── Admin API ─────────────────────────────────────────────────────────────────
 
 app.post('/api/admin/setup-pin', (req, res) => {
@@ -521,30 +610,31 @@ app.post('/api/admin/setup-pin', (req, res) => {
   }
 })
 
-app.post('/api/admin/verify-pin', adminAuth, (req, res) => {
+app.post('/api/admin/verify-pin', requireParent, (req, res) => {
   res.json({ ok: true })
 })
 
-app.get('/api/admin/sessions', adminAuth, (req, res) => {
+app.get('/api/admin/sessions', requireParent, (req, res) => {
   try {
+    const accountId = req.accountId
     const { child_id, limit = 50, offset = 0 } = req.query
     let sessions
     if (child_id) {
       sessions = db.prepare(`
         SELECT rs.*, c.name as child_name FROM reading_sessions rs
         JOIN children c ON c.id = rs.child_id
-        WHERE rs.child_id = ? AND rs.status != 'started'
+        WHERE rs.account_id = ? AND rs.child_id = ? AND rs.status != 'started'
         ORDER BY rs.date DESC, rs.start_time DESC
         LIMIT ? OFFSET ?
-      `).all(child_id, parseInt(limit), parseInt(offset))
+      `).all(accountId, child_id, parseInt(limit), parseInt(offset))
     } else {
       sessions = db.prepare(`
         SELECT rs.*, c.name as child_name FROM reading_sessions rs
         JOIN children c ON c.id = rs.child_id
-        WHERE rs.status != 'started'
+        WHERE rs.account_id = ? AND rs.status != 'started'
         ORDER BY rs.date DESC, rs.start_time DESC
         LIMIT ? OFFSET ?
-      `).all(parseInt(limit), parseInt(offset))
+      `).all(accountId, parseInt(limit), parseInt(offset))
     }
     res.json(sessions)
   } catch (err) {
@@ -552,14 +642,14 @@ app.get('/api/admin/sessions', adminAuth, (req, res) => {
   }
 })
 
-app.get('/api/admin/sessions/:id', adminAuth, (req, res) => {
+app.get('/api/admin/sessions/:id', requireParent, (req, res) => {
   try {
     const sessionId = parseInt(req.params.id)
     const session = db.prepare(`
       SELECT rs.*, c.name as child_name FROM reading_sessions rs
       JOIN children c ON c.id = rs.child_id
-      WHERE rs.id = ?
-    `).get(sessionId)
+      WHERE rs.id = ? AND rs.account_id = ?
+    `).get(sessionId, req.accountId)
     if (!session) return res.status(404).json({ error: 'not found' })
     const pdfReads = db.prepare('SELECT * FROM pdf_reads WHERE session_id = ?').all(sessionId)
     const pageEvents = db.prepare(
@@ -583,15 +673,16 @@ app.get('/api/admin/sessions/:id', adminAuth, (req, res) => {
   }
 })
 
-app.post('/api/admin/sessions/bulk-delete', adminAuth, (req, res) => {
+app.post('/api/admin/sessions/bulk-delete', requireParent, (req, res) => {
   try {
     const { ids } = req.body
+    const accountId = req.accountId
     if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: 'ids array required' })
     let deleted = 0
     const missing = []
     const doDelete = db.transaction(() => {
       for (const id of ids) {
-        const session = db.prepare('SELECT recording_path FROM reading_sessions WHERE id = ?').get(id)
+        const session = db.prepare('SELECT recording_path FROM reading_sessions WHERE id = ? AND account_id = ?').get(id, accountId)
         if (!session) { missing.push(id); continue }
         db.prepare('DELETE FROM pdf_reads WHERE session_id = ?').run(id)
         db.prepare('DELETE FROM reading_sessions WHERE id = ?').run(id)
@@ -609,10 +700,10 @@ app.post('/api/admin/sessions/bulk-delete', adminAuth, (req, res) => {
   }
 })
 
-app.delete('/api/admin/sessions/:id', adminAuth, (req, res) => {
+app.delete('/api/admin/sessions/:id', requireParent, (req, res) => {
   try {
     const sessionId = parseInt(req.params.id)
-    const session = db.prepare('SELECT recording_path FROM reading_sessions WHERE id = ?').get(sessionId)
+    const session = db.prepare('SELECT recording_path FROM reading_sessions WHERE id = ? AND account_id = ?').get(sessionId, req.accountId)
     if (!session) return res.status(404).json({ error: 'not found' })
     db.prepare('DELETE FROM pdf_reads WHERE session_id = ?').run(sessionId)
     db.prepare('DELETE FROM reading_sessions WHERE id = ?').run(sessionId)
@@ -630,15 +721,10 @@ app.delete('/api/admin/sessions/:id', adminAuth, (req, res) => {
   }
 })
 
-app.get('/api/admin/sessions/:id/recording', (req, res) => {
+app.get('/api/admin/sessions/:id/recording', requireParent, (req, res) => {
   try {
-    const pin = req.query.pin || ''
-    const stored = db.prepare("SELECT value FROM config WHERE key='parent_pin'").get()
-    if (!stored || stored.value === '' || pin !== stored.value) {
-      return res.status(401).json({ error: 'unauthorized' })
-    }
     const sessionId = parseInt(req.params.id)
-    const session = db.prepare('SELECT * FROM reading_sessions WHERE id = ?').get(sessionId)
+    const session = db.prepare('SELECT * FROM reading_sessions WHERE id = ? AND account_id = ?').get(sessionId, req.accountId)
     if (!session) return res.status(404).json({ error: 'not found' })
     if (!session.recording_path) return res.status(404).json({ error: 'no recording' })
     const filePath = path.join(RECORDINGS_DIR, session.recording_path)
@@ -651,14 +737,15 @@ app.get('/api/admin/sessions/:id/recording', (req, res) => {
   }
 })
 
-app.post('/api/admin/sessions/:id/review', adminAuth, (req, res) => {
+app.post('/api/admin/sessions/:id/review', requireParent, (req, res) => {
   try {
     const sessionId = parseInt(req.params.id)
     const { decision } = req.body
     if (!['passed', 'redo'].includes(decision)) {
       return res.status(400).json({ error: 'decision must be passed|redo' })
     }
-    const sessionBefore = db.prepare('SELECT * FROM reading_sessions WHERE id = ?').get(sessionId)
+    const sessionBefore = db.prepare('SELECT * FROM reading_sessions WHERE id = ? AND account_id = ?').get(sessionId, req.accountId)
+    if (!sessionBefore) return res.status(404).json({ error: 'not found' })
     const status = decision === 'redo' ? 'redo_required' : decision
     db.prepare('UPDATE reading_sessions SET status = ? WHERE id = ?').run(status, sessionId)
     const session = db.prepare('SELECT * FROM reading_sessions WHERE id = ?').get(sessionId)
@@ -818,15 +905,18 @@ app.post('/api/recitation/:id/complete', upload.single('recording'), (req, res) 
   }
 })
 
-app.post('/api/admin/recitation/schedule', adminAuth, (req, res) => {
+app.post('/api/admin/recitation/schedule', requireParent, (req, res) => {
   try {
     const { child_id, pdf_filename, scheduled_date } = req.body
     if (!child_id || !pdf_filename || !scheduled_date) {
       return res.status(400).json({ error: 'child_id, pdf_filename, scheduled_date required' })
     }
+    if (!db.prepare('SELECT 1 FROM children WHERE id = ? AND account_id = ?').get(child_id, req.accountId)) {
+      return res.status(404).json({ error: 'child not found' })
+    }
     const result = db.prepare(
-      "INSERT INTO recitation_plans (child_id, pdf_filename, scheduled_date, status) VALUES (?, ?, ?, 'scheduled')"
-    ).run(child_id, pdf_filename, scheduled_date)
+      "INSERT INTO recitation_plans (child_id, pdf_filename, scheduled_date, status, account_id) VALUES (?, ?, ?, 'scheduled', ?)"
+    ).run(child_id, pdf_filename, scheduled_date, req.accountId)
     const plan = db.prepare('SELECT * FROM recitation_plans WHERE id = ?').get(result.lastInsertRowid)
     res.json(plan)
   } catch (err) {
@@ -834,7 +924,7 @@ app.post('/api/admin/recitation/schedule', adminAuth, (req, res) => {
   }
 })
 
-app.get('/api/admin/recitation', adminAuth, (req, res) => {
+app.get('/api/admin/recitation', requireParent, (req, res) => {
   try {
     const { upcoming } = req.query
     let plans
@@ -843,15 +933,16 @@ app.get('/api/admin/recitation', adminAuth, (req, res) => {
       plans = db.prepare(`
         SELECT rp.*, c.name as child_name FROM recitation_plans rp
         JOIN children c ON c.id = rp.child_id
-        WHERE rp.scheduled_date >= ?
+        WHERE rp.account_id = ? AND rp.scheduled_date >= ?
         ORDER BY rp.scheduled_date ASC
-      `).all(today)
+      `).all(req.accountId, today)
     } else {
       plans = db.prepare(`
         SELECT rp.*, c.name as child_name FROM recitation_plans rp
         JOIN children c ON c.id = rp.child_id
+        WHERE rp.account_id = ?
         ORDER BY rp.scheduled_date ASC
-      `).all()
+      `).all(req.accountId)
     }
     res.json(plans)
   } catch (err) {
@@ -859,9 +950,10 @@ app.get('/api/admin/recitation', adminAuth, (req, res) => {
   }
 })
 
-app.delete('/api/admin/recitation/:id', adminAuth, (req, res) => {
+app.delete('/api/admin/recitation/:id', requireParent, (req, res) => {
   try {
-    db.prepare('DELETE FROM recitation_plans WHERE id = ?').run(parseInt(req.params.id))
+    const result = db.prepare('DELETE FROM recitation_plans WHERE id = ? AND account_id = ?').run(parseInt(req.params.id), req.accountId)
+    if (result.changes === 0) return res.status(404).json({ error: 'not found' })
     res.json({ ok: true })
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -870,7 +962,7 @@ app.delete('/api/admin/recitation/:id', adminAuth, (req, res) => {
 
 // ── Admin children CRUD ───────────────────────────────────────────────────────
 
-app.post('/api/admin/children', adminAuth, (req, res) => {
+app.post('/api/admin/children', requireParent, (req, res) => {
   try {
     const { name, age } = req.body
     if (!name || !age) return res.status(400).json({ error: 'name and age required' })
@@ -881,16 +973,16 @@ app.post('/api/admin/children', adminAuth, (req, res) => {
     const scale = ageNum <= 7 ? 1.25 : ageNum >= 18 ? 0.95 : 1.0
     const defaultDir = db.prepare("SELECT value FROM config WHERE key='pdf_dir'").get()?.value || null
     db.prepare(
-      'INSERT INTO children (id, name, age, font_scale, pdf_dir, daily_count) VALUES (?, ?, ?, ?, ?, 3)'
-    ).run(id, name.trim(), ageNum, scale, defaultDir)
+      'INSERT INTO children (id, name, age, font_scale, pdf_dir, daily_count, account_id) VALUES (?, ?, ?, ?, ?, 3, ?)'
+    ).run(id, name.trim(), ageNum, scale, defaultDir, req.accountId)
     res.json(db.prepare('SELECT * FROM children WHERE id = ?').get(id))
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
-app.delete('/api/admin/children/:id', adminAuth, (req, res) => {
+app.delete('/api/admin/children/:id', requireParent, (req, res) => {
   try {
     const id = req.params.id
-    if (!db.prepare('SELECT 1 FROM children WHERE id = ?').get(id)) {
+    if (!db.prepare('SELECT 1 FROM children WHERE id = ? AND account_id = ?').get(id, req.accountId)) {
       return res.status(404).json({ error: 'not found' })
     }
     const sessionIds = db.prepare('SELECT id FROM reading_sessions WHERE child_id = ?').all(id).map(r => r.id)
@@ -908,12 +1000,15 @@ app.delete('/api/admin/children/:id', adminAuth, (req, res) => {
 
 // ── Admin pool management ─────────────────────────────────────────────────────
 
-app.post('/api/admin/pool/configure', adminAuth, (req, res) => {
+app.post('/api/admin/pool/configure', requireParent, (req, res) => {
   try {
     const { child_id, cursor_library_id, daily_count, min_duration_s } = req.body
     if (!child_id) return res.status(400).json({ error: 'child_id required' })
     if (cursor_library_id === undefined && daily_count === undefined && min_duration_s === undefined) {
       return res.status(400).json({ error: 'at least one field required' })
+    }
+    if (!db.prepare('SELECT 1 FROM children WHERE id = ? AND account_id = ?').get(child_id, req.accountId)) {
+      return res.status(404).json({ error: 'child not found' })
     }
 
     let cursorLibId = null
@@ -935,23 +1030,26 @@ app.post('/api/admin/pool/configure', adminAuth, (req, res) => {
         cursor_library_id = CASE WHEN ? IS NOT NULL THEN ? ELSE cursor_library_id END,
         cursor_pdf        = CASE WHEN ? IS NOT NULL THEN ? ELSE cursor_pdf END,
         daily_count       = CASE WHEN ? IS NOT NULL THEN ? ELSE daily_count END
-      WHERE id = ?
-    `).run(cursorLibId, cursorLibId, cursorFilename, cursorFilename, countVal, countVal, child_id)
+      WHERE id = ? AND account_id = ?
+    `).run(cursorLibId, cursorLibId, cursorFilename, cursorFilename, countVal, countVal, child_id, req.accountId)
 
     if (min_duration_s !== undefined) {
       const durVal = min_duration_s === null ? null : parseInt(min_duration_s)
       if (durVal !== null && (isNaN(durVal) || durVal < 60 || durVal > 3600)) {
         return res.status(400).json({ error: 'min_duration_s must be 60-3600' })
       }
-      db.prepare('UPDATE children SET min_duration_s = ? WHERE id = ?').run(durVal, child_id)
+      db.prepare('UPDATE children SET min_duration_s = ? WHERE id = ? AND account_id = ?').run(durVal, child_id, req.accountId)
     }
 
     res.json(db.prepare('SELECT * FROM children WHERE id = ?').get(child_id))
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
-app.get('/api/admin/pool/preview/:childId', adminAuth, (req, res) => {
+app.get('/api/admin/pool/preview/:childId', requireParent, (req, res) => {
   try {
+    if (!db.prepare('SELECT 1 FROM children WHERE id = ? AND account_id = ?').get(req.params.childId, req.accountId)) {
+      return res.status(404).json({ error: 'child not found' })
+    }
     const pool = getTodayPool(req.params.childId).map(p => ({
       library_id: p.library_id,
       filename: p.filename,

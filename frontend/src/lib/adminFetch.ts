@@ -1,15 +1,16 @@
+try { sessionStorage.removeItem('parent_pin') } catch (_) {}
+
 export function adminFetch(url: string, opts: RequestInit = {}) {
-  const pin = sessionStorage.getItem('parent_pin') || ''
   return fetch(url, {
     ...opts,
-    headers: { 'Content-Type': 'application/json', ...opts.headers, 'X-Admin-Pin': pin },
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', ...opts.headers },
   })
 }
 
 export function adminRecordingUrl(sessionId: number) {
-  const pin = sessionStorage.getItem('parent_pin') || ''
-  return `/api/admin/sessions/${sessionId}/recording?pin=${encodeURIComponent(pin)}`
+  return `/api/admin/sessions/${sessionId}/recording`
 }
 
-export function isAdminAuthed() { return !!sessionStorage.getItem('parent_pin') }
-export function clearAdminAuth() { sessionStorage.removeItem('parent_pin') }
+export function isAdminAuthed() { return false }
+export function clearAdminAuth() { try { sessionStorage.removeItem('parent_pin') } catch (_) {} }

@@ -236,6 +236,48 @@ function changePassword(db, accountId, oldPassword, newPassword) {
   console.log(`[change-password] password changed for account_id=${accountId}`)
 }
 
+// Sprint 1B: PIN + 家长会话
+const PARENT_SESSION_TTL_MS = 60 * 60 * 1000  // 1 小时
+
+function verifyParentPin(db, accountId, pin) {
+  const acct = db.prepare('SELECT parent_pin_hash FROM accounts WHERE id = ?').get(accountId)
+  if (!acct || !acct.parent_pin_hash) return false
+  return verifyPassword(String(pin), acct.parent_pin_hash)
+}
+
+function setParentPin(db, accountId, pin) {
+  if (typeof pin !== 'string' || !/^\d{4,8}$/.test(pin)) {
+    throw new Error('PIN must be 4-8 digits')
+  }
+  const hash = hashPassword(pin)
+  db.prepare('UPDATE accounts SET parent_pin_hash = ? WHERE id = ?').run(hash, accountId)
+  console.log(`[set-pin] account_id=${accountId} PIN updated`)
+}
+
+function createParentSession(db, accountId) {
+  const token = generateToken()
+  const expiresAt = new Date(Date.now() + PARENT_SESSION_TTL_MS).toISOString()
+  db.prepare(
+    'INSERT INTO parent_sessions (token, account_id, expires_at) VALUES (?, ?, ?)'
+  ).run(token, accountId, expiresAt)
+  return { token, expiresAt }
+}
+
+function getCurrentParentSession(db, parentToken) {
+  if (!parentToken) return null
+  const now = new Date().toISOString()
+  return db.prepare(`
+    SELECT account_id, expires_at
+    FROM parent_sessions
+    WHERE token = ? AND expires_at > ?
+  `).get(parentToken, now) || null
+}
+
+function deleteParentSession(db, parentToken) {
+  if (!parentToken) return
+  db.prepare('DELETE FROM parent_sessions WHERE token = ?').run(parentToken)
+}
+
 module.exports = {
   // 保留老 API 名（向后兼容）
   requestMagicLink: requestLoginCode,
@@ -250,4 +292,9 @@ module.exports = {
   resetPasswordWithCode,
   changePassword,
   setUsername,
+  verifyParentPin,
+  setParentPin,
+  createParentSession,
+  getCurrentParentSession,
+  deleteParentSession,
 }

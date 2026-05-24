@@ -261,4 +261,21 @@ try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_username ON accoun
 // Sprint 1A-4: magic_links 加 6 位验证码字段
 try { db.exec('ALTER TABLE magic_links ADD COLUMN code TEXT') } catch (e) {}
 
+// Sprint 1B: 迁移老 PIN 从 config 表（明文）到 accounts.parent_pin_hash（PBKDF2）
+try {
+  const cfg = db.prepare("SELECT value FROM config WHERE key = 'parent_pin'").get()
+  if (cfg && cfg.value && cfg.value.length > 0) {
+    const acct = db.prepare('SELECT id, parent_pin_hash FROM accounts WHERE id = 1').get()
+    if (acct && !acct.parent_pin_hash) {
+      const crypto = require('crypto')
+      const salt = crypto.randomBytes(32)
+      const hash = crypto.pbkdf2Sync(cfg.value, salt, 100_000, 32, 'sha256')
+      const stored = `${salt.toString('hex')}:${hash.toString('hex')}`
+      db.prepare('UPDATE accounts SET parent_pin_hash = ? WHERE id = 1').run(stored)
+      db.prepare("UPDATE config SET value = '' WHERE key = 'parent_pin'").run()
+      console.log('[Sprint 1B] Migrated PIN from config(plain) to accounts.parent_pin_hash(PBKDF2) for account_id=1')
+    }
+  }
+} catch (e) { console.error('PIN migration:', e.message) }
+
 module.exports = db;

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { adminFetch, adminRecordingUrl, isAdminAuthed, clearAdminAuth } from '../lib/adminFetch'
+import { adminFetch, adminRecordingUrl } from '../lib/adminFetch'
 import PdfReviewer from '../components/PdfReviewer'
 
 type View = 'loading' | 'setup' | 'login' | 'dashboard'
@@ -457,10 +457,15 @@ function AccountInlineSettings() {
   const [me, setMe] = useState<MeData | null | undefined>(undefined)
   const [editingUsername, setEditingUsername] = useState(false)
   const [editingPassword, setEditingPassword] = useState(false)
+  const [editingPin, setEditingPin] = useState(false)
   const [usernameInput, setUsernameInput] = useState('')
   const [oldPassword, setOldPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [newPassword2, setNewPassword2] = useState('')
+  const [oldPin, setOldPin] = useState('')
+  const [newPin, setNewPin] = useState('')
+  const [newPin2, setNewPin2] = useState('')
+  const [hasPin, setHasPin] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -470,6 +475,10 @@ function AccountInlineSettings() {
       .then(r => r.ok ? r.json() : null)
       .then(setMe)
       .catch(() => setMe(null))
+    fetch('/api/auth/parent-status')
+      .then(r => r.ok ? r.json() : null)
+      .then(s => { if (s) setHasPin(s.has_pin) })
+      .catch(() => {})
   }
   useEffect(loadMe, [])
 
@@ -514,13 +523,37 @@ function AccountInlineSettings() {
     finally { setSubmitting(false) }
   }
 
+  const savePin = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (newPin !== newPin2) { setError('两次 PIN 不一致'); return }
+    if (!/^\d{4,6}$/.test(newPin)) { setError('PIN 必须是 4-6 位数字'); return }
+    setSubmitting(true); setError(''); setSuccess('')
+    try {
+      const body: Record<string, string> = { newPin }
+      if (hasPin && oldPin) body.oldPin = oldPin
+      const res = await fetch('/api/auth/set-pin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error((d as { error?: string }).error || `修改失败 ${res.status}`)
+      }
+      setSuccess('家长 PIN 修改成功')
+      setEditingPin(false); setOldPin(''); setNewPin(''); setNewPin2('')
+      setHasPin(true)
+    } catch (err: unknown) { setError(err instanceof Error ? err.message : '网络错误') }
+    finally { setSubmitting(false) }
+  }
+
   if (!me) return null
 
   return (
     <div>
       <div className="mb-3">
         <h2 className="text-xl font-extrabold text-brown-text">账户设置</h2>
-        <p className="text-sm text-brown-mute mt-0.5">登录用户信息、修改用户名、修改密码</p>
+        <p className="text-sm text-brown-mute mt-0.5">登录用户信息、修改用户名、修改密码、家长 PIN</p>
       </div>
       <div className="bg-white rounded-[20px] p-5 shadow-[0_4px_24px_rgba(224,122,95,0.08)]">
         <div className="bg-cream rounded-[12px] p-4 mb-4 text-sm space-y-1.5">
@@ -569,11 +602,11 @@ function AccountInlineSettings() {
 
         {!editingPassword ? (
           <button onClick={() => { setEditingPassword(true); setError(''); setSuccess('') }}
-            className="w-full text-left bg-cream/60 hover:bg-cream rounded-[10px] px-4 py-2.5 text-sm font-bold text-brown-text">
+            className="w-full text-left bg-cream/60 hover:bg-cream rounded-[10px] px-4 py-2.5 mb-2 text-sm font-bold text-brown-text">
             🔒 修改密码
           </button>
         ) : (
-          <form onSubmit={savePassword} className="bg-cream/40 rounded-[10px] p-4 space-y-2">
+          <form onSubmit={savePassword} className="bg-cream/40 rounded-[10px] p-4 mb-2 space-y-2">
             <input type="password" placeholder="当前密码（首次设置可空）" value={oldPassword}
               onChange={e => setOldPassword(e.target.value)}
               className="w-full bg-white rounded-[8px] px-3 py-2 text-sm border-2 border-transparent focus:border-peach outline-none" />
@@ -589,6 +622,35 @@ function AccountInlineSettings() {
                 {submitting ? '保存中...' : '保存'}
               </button>
               <button type="button" onClick={() => { setEditingPassword(false); setError('') }}
+                className="px-4 bg-cream text-brown-mute py-2 rounded-[8px] text-sm font-bold">取消</button>
+            </div>
+          </form>
+        )}
+
+        {!editingPin ? (
+          <button onClick={() => { setEditingPin(true); setError(''); setSuccess('') }}
+            className="w-full text-left bg-cream/60 hover:bg-cream rounded-[10px] px-4 py-2.5 text-sm font-bold text-brown-text">
+            🔑 {hasPin ? '修改家长 PIN' : '设置家长 PIN'}
+          </button>
+        ) : (
+          <form onSubmit={savePin} className="bg-cream/40 rounded-[10px] p-4 space-y-2">
+            {hasPin && (
+              <input type="password" inputMode="numeric" maxLength={6} placeholder="当前 PIN" value={oldPin}
+                onChange={e => setOldPin(e.target.value.replace(/\D/g, ''))}
+                className="w-full bg-white rounded-[8px] px-3 py-2 text-sm border-2 border-transparent focus:border-peach outline-none" />
+            )}
+            <input type="password" inputMode="numeric" maxLength={6} required placeholder="新 PIN（4-6 位数字）" value={newPin}
+              onChange={e => setNewPin(e.target.value.replace(/\D/g, ''))}
+              className="w-full bg-white rounded-[8px] px-3 py-2 text-sm border-2 border-transparent focus:border-peach outline-none" />
+            <input type="password" inputMode="numeric" maxLength={6} required placeholder="再输一次新 PIN" value={newPin2}
+              onChange={e => setNewPin2(e.target.value.replace(/\D/g, ''))}
+              className="w-full bg-white rounded-[8px] px-3 py-2 text-sm border-2 border-transparent focus:border-peach outline-none" />
+            <div className="flex gap-2">
+              <button type="submit" disabled={submitting}
+                className="flex-1 bg-peach text-white py-2 rounded-[8px] text-sm font-extrabold disabled:opacity-40">
+                {submitting ? '保存中...' : '保存'}
+              </button>
+              <button type="button" onClick={() => { setEditingPin(false); setOldPin(''); setNewPin(''); setNewPin2(''); setError('') }}
                 className="px-4 bg-cream text-brown-mute py-2 rounded-[8px] text-sm font-bold">取消</button>
             </div>
           </form>
@@ -646,10 +708,11 @@ export default function ParentPage() {
 
   // ── Init ─────────────────────────────────────────────────────────────────
   useEffect(() => {
-    fetch('/api/config').then(r => r.json()).then(cfg => {
-      if (!cfg.hasParentPin)  setView('setup')
-      else if (isAdminAuthed()) setView('dashboard')
-      else                    setView('login')
+    fetch('/api/auth/parent-status').then(r => r.json()).then(status => {
+      if (!status.logged_in) { navigate('/login'); return }
+      if (!status.has_pin)            setView('setup')
+      else if (status.parent_unlocked) setView('dashboard')
+      else                             setView('login')
     }).catch(() => setView('login'))
   }, [])
 
@@ -838,31 +901,30 @@ export default function ParentPage() {
     if (pin !== confirmPin)       { setError('两次输入的 PIN 不一致'); return }
     setError('')
     try {
-      const res = await fetch('/api/admin/setup-pin', {
+      const r1 = await fetch('/api/auth/set-pin', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ newPin: pin }),
+      })
+      if (!r1.ok) { const d = await r1.json(); setError(d.error || '设置失败'); return }
+      const r2 = await fetch('/api/auth/parent-unlock', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pin }),
       })
-      if (res.ok) {
-        sessionStorage.setItem('parent_pin', pin)
-        setPin(''); setConfirmPin('')
-        setView('dashboard')
-      } else {
-        const d = await res.json()
-        setError(d.error || '设置失败')
-      }
+      if (!r2.ok) { const d = await r2.json(); setError(d.error || '解锁失败'); return }
+      setPin(''); setConfirmPin('')
+      setView('dashboard')
     } catch { setError('网络错误') }
   }
 
-  const handleLogin = async () => {
+  const handleUnlock = async () => {
     if (!pin || lockSeconds > 0) return
     setError('')
     try {
-      const res = await fetch('/api/admin/verify-pin', {
+      const res = await fetch('/api/auth/parent-unlock', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pin }),
       })
       if (res.ok) {
-        sessionStorage.setItem('parent_pin', pin)
         setPin(''); setView('dashboard')
       } else if (res.status === 429) {
         const d = await res.json()
@@ -916,7 +978,7 @@ export default function ParentPage() {
                 请稍候 {lockSeconds} 秒后重试
               </p>
             )}
-            <button onClick={isSetup ? handleSetup : handleLogin} disabled={lockSeconds > 0}
+            <button onClick={isSetup ? handleSetup : handleUnlock} disabled={lockSeconds > 0}
               className="bg-peach text-white rounded-[14px] py-3.5 font-extrabold w-full
                 text-[15px] hover:bg-peach-deep transition-colors disabled:opacity-40">
               {isSetup ? '设置 PIN' : '进入面板'}
@@ -953,7 +1015,7 @@ export default function ParentPage() {
       {/* Top bar */}
       <div className="bg-shell-dark px-6 py-4 flex justify-between items-center">
         <span className="text-white font-extrabold text-[18px]">家长面板</span>
-        <button onClick={() => { clearAdminAuth(); navigate('/') }}
+        <button onClick={() => { fetch('/api/auth/parent-lock', { method: 'POST' }); navigate('/') }}
           className="text-[#C09A80] text-sm font-bold hover:text-white transition-colors">
           退出 →
         </button>
