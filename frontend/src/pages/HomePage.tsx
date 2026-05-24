@@ -208,7 +208,7 @@ export default function HomePage() {
   return (
     <div className="relative min-h-screen bg-cream flex flex-col items-center px-6 pt-10 pb-16">
       <Link to="/parent" className="absolute top-6 right-6 text-brown-faint text-sm font-extrabold hover:text-peach">
-        👨‍👩‍👧 家长
+        ⚙️ 用户设置
       </Link>
       <h1 className="text-[30px] font-extrabold text-brown-text tracking-tight mb-8">
         Morning Reader
@@ -219,7 +219,6 @@ export default function HomePage() {
         {authMe ? (
           <>
             <span className="text-brown-mute">已登录 <span className="font-extrabold text-brown-text">{authMe.email}</span>{authMe.is_superadmin ? ' 👑' : ''}</span>
-            <Link to="/parent" className="text-peach hover:text-peach-deep font-bold">家长面板</Link>
             <button onClick={handleLogout} className="text-peach hover:text-peach-deep font-bold">退出</button>
           </>
         ) : (
