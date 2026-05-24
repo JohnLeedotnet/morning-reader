@@ -188,11 +188,14 @@ export default function HomePage() {
             家庭晨读管理工具<br />
             家长监督孩子英文朗读 + 录音 + 审核
           </p>
-          <Link to="/login"
-            className="inline-block bg-peach text-white font-extrabold px-8 py-3 rounded-[14px]
-              hover:opacity-90 transition-opacity">
-            登录 / 注册
-          </Link>
+          <div className="flex gap-3 justify-center">
+            <Link to="/login" className="inline-block bg-peach text-white font-extrabold px-6 py-3 rounded-[14px] hover:opacity-90 transition-opacity">
+              登录
+            </Link>
+            <Link to="/register" className="inline-block bg-shell-dark text-white font-extrabold px-6 py-3 rounded-[14px] hover:opacity-90 transition-opacity">
+              注册
+            </Link>
+          </div>
           <p className="text-[11px] text-brown-faint mt-6">
             输入邮箱即可，无需密码
           </p>

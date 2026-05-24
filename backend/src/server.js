@@ -76,41 +76,73 @@ function getConfig() {
   }, {});
 }
 
-// ── Sprint 1A: Magic-link auth ────────────────────────────────────────────────
+// ── Sprint 1A-4: 6 位验证码登录 + 用户名密码注册 ────
 
-// 发起魔法链接（不暴露 email 是否已注册，防 enumeration）
-app.post('/api/auth/magic-link/request', async (req, res) => {
+// 发 6 位验证码到邮箱
+app.post('/api/auth/login/start', async (req, res) => {
   try {
     const { email } = req.body
     if (!email) return res.status(400).json({ error: 'email required' })
-    const baseUrl = process.env.PUBLIC_BASE_URL || 'https://www.morningreader.org'
-    await auth.requestMagicLink(db, email, baseUrl)
+    await auth.requestLoginCode(db, email)
     res.json({ ok: true })
   } catch (err) {
-    console.warn('[magic-link/request] suppressed error:', err.message)
-    res.json({ ok: true })  // 静默成功防 email enumeration
+    console.warn('[login/start]', err.message)
+    res.json({ ok: true })  // 静默成功防 enumeration
   }
 })
 
-// 验证 → 设 cookie → redirect 到首页
-app.get('/api/auth/magic-link/verify', (req, res) => {
+// 验证 6 位码 → 设 cookie
+app.post('/api/auth/login/verify-code', (req, res) => {
   try {
-    const { token } = req.query
-    if (!token) return res.status(400).send('token required')
-    const { sessionToken, sessionExpiresAt } = auth.verifyMagicLink(db, token, req.ip)
+    const { email, code } = req.body
+    if (!email || !code) return res.status(400).json({ error: 'email and code required' })
+    const { sessionToken, sessionExpiresAt } = auth.verifyLoginCode(db, email, code, req.ip)
     res.cookie('auth_token', sessionToken, {
-      httpOnly: true,
-      sameSite: 'lax',
+      httpOnly: true, sameSite: 'lax',
       secure: req.protocol === 'https',
       expires: new Date(sessionExpiresAt),
     })
-    res.redirect('/')
+    res.json({ ok: true })
   } catch (err) {
-    res.status(400).send(`Login failed: ${err.message}. <a href="/login">Try again</a>`)
+    res.status(400).json({ error: err.message })
   }
 })
 
-// 当前已登录用户信息
+// 一步注册：email + username + password → 创建 account + 设 cookie
+app.post('/api/auth/register', (req, res) => {
+  try {
+    const { email, username, password } = req.body
+    if (!email || !username || !password) return res.status(400).json({ error: 'email, username, password required' })
+    const { sessionToken, sessionExpiresAt } = auth.register(db, email, username, password, req.ip)
+    res.cookie('auth_token', sessionToken, {
+      httpOnly: true, sameSite: 'lax',
+      secure: req.protocol === 'https',
+      expires: new Date(sessionExpiresAt),
+    })
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+// 用户名/邮箱 + 密码登录 → 设 cookie
+app.post('/api/auth/login/password', (req, res) => {
+  try {
+    const { username, password } = req.body
+    if (!username || !password) return res.status(400).json({ error: 'username and password required' })
+    const { sessionToken, sessionExpiresAt } = auth.loginWithPassword(db, username, password, req.ip)
+    res.cookie('auth_token', sessionToken, {
+      httpOnly: true, sameSite: 'lax',
+      secure: req.protocol === 'https',
+      expires: new Date(sessionExpiresAt),
+    })
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(401).json({ error: err.message })
+  }
+})
+
+// 当前 session
 app.get('/api/auth/me', (req, res) => {
   const session = auth.getCurrentSession(db, req.cookies?.auth_token)
   if (!session) return res.status(401).json({ error: 'not authenticated' })
@@ -127,6 +159,17 @@ app.post('/api/auth/logout', (req, res) => {
   auth.deleteSession(db, req.cookies?.auth_token)
   res.clearCookie('auth_token')
   res.json({ ok: true })
+})
+
+// 老 magic-link/verify 端点（deprecate）
+app.get('/api/auth/magic-link/verify', (req, res) => {
+  res.status(410).send('Magic link login has been replaced by 6-digit code. Please request a new login code at /login.')
+})
+app.post('/api/auth/magic-link/request', async (req, res) => {
+  try {
+    await auth.requestLoginCode(db, req.body?.email)
+    res.json({ ok: true })
+  } catch (err) { res.json({ ok: true }) }
 })
 
 // ── Sprint 0 routes ───────────────────────────────────────────────────────────

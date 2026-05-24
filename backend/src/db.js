@@ -253,4 +253,12 @@ try {
 try { db.exec('ALTER TABLE pdf_library ADD COLUMN category_path TEXT') } catch (e) {}
 try { db.exec('CREATE INDEX IF NOT EXISTS idx_pdf_library_category ON pdf_library(category_path)') } catch (e) {}
 
+// Sprint 1A-4: 用户名 + 密码
+try { db.exec('ALTER TABLE accounts ADD COLUMN username TEXT') } catch (e) {}
+try { db.exec('ALTER TABLE accounts ADD COLUMN password_hash TEXT') } catch (e) {}
+try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_username ON accounts(username) WHERE username IS NOT NULL') } catch (e) {}
+
+// Sprint 1A-4: magic_links 加 6 位验证码字段
+try { db.exec('ALTER TABLE magic_links ADD COLUMN code TEXT') } catch (e) {}
+
 module.exports = db;

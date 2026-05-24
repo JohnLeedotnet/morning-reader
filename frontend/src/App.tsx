@@ -10,6 +10,7 @@ import ParentPage from './pages/ParentPage'
 import HistoryPage from './pages/HistoryPage'
 import GamePage from './pages/GamePage'
 import DiscardedPage from './pages/DiscardedPage'
+import RegisterPage from './pages/RegisterPage'
 
 export default function App() {
   return (
@@ -17,6 +18,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<HomePage />} />
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/register" element={<RegisterPage />} />
         <Route path="/discarded" element={<DiscardedPage />} />
         <Route path="/reading/:childId" element={<ReadingPage />} />
         <Route path="/recitation/:childId" element={<RecitationPage />} />
