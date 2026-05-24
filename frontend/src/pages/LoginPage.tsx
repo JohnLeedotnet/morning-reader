@@ -104,6 +104,9 @@ export default function LoginPage() {
               className="w-full bg-peach text-white py-3 rounded-[12px] font-extrabold disabled:opacity-40">
               {submitting ? '登录中...' : '登录'}
             </button>
+            <div className="text-center">
+              <Link to="/forgot-password" className="text-xs text-brown-mute hover:text-peach">忘记密码？</Link>
+            </div>
           </form>
         )}
 

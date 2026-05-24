@@ -219,6 +219,7 @@ export default function HomePage() {
         {authMe ? (
           <>
             <span className="text-brown-mute">已登录 <span className="font-extrabold text-brown-text">{authMe.email}</span>{authMe.is_superadmin ? ' 👑' : ''}</span>
+            <Link to="/profile" className="text-brown-mute hover:text-peach font-bold">我的</Link>
             <button onClick={handleLogout} className="text-peach hover:text-peach-deep font-bold">退出</button>
           </>
         ) : (

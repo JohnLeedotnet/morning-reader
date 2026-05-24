@@ -161,6 +161,44 @@ app.post('/api/auth/logout', (req, res) => {
   res.json({ ok: true })
 })
 
+// Sprint 1A-5: 忘记密码 — 第一步：发验证码（复用 requestLoginCode）
+app.post('/api/auth/forgot-password/start', async (req, res) => {
+  try {
+    const { email } = req.body
+    if (!email) return res.status(400).json({ error: 'email required' })
+    await auth.requestLoginCode(db, email)
+    res.json({ ok: true })
+  } catch (err) {
+    res.json({ ok: true })  // 静默成功防 enumeration
+  }
+})
+
+// Sprint 1A-5: 忘记密码 — 第二步：验证码 + 新密码
+app.post('/api/auth/forgot-password/reset', (req, res) => {
+  try {
+    const { email, code, newPassword } = req.body
+    if (!email || !code || !newPassword) return res.status(400).json({ error: 'email, code, newPassword required' })
+    auth.resetPasswordWithCode(db, email, code, newPassword)
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+// Sprint 1A-5: 修改密码（已登录）
+app.post('/api/auth/change-password', (req, res) => {
+  const session = auth.getCurrentSession(db, req.cookies?.auth_token)
+  if (!session) return res.status(401).json({ error: 'not authenticated' })
+  try {
+    const { oldPassword, newPassword } = req.body
+    if (!newPassword) return res.status(400).json({ error: 'newPassword required' })
+    auth.changePassword(db, session.account_id, oldPassword || null, newPassword)
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
 // 老 magic-link/verify 端点（deprecate）
 app.get('/api/auth/magic-link/verify', (req, res) => {
   res.status(410).send('Magic link login has been replaced by 6-digit code. Please request a new login code at /login.')

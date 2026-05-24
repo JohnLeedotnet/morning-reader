@@ -193,6 +193,37 @@ function deleteSession(db, authToken) {
   db.prepare('DELETE FROM auth_sessions WHERE token = ?').run(authToken)
 }
 
+// Sprint 1A-5: 忘记密码 — 用验证码重置密码
+function resetPasswordWithCode(db, email, code, newPassword) {
+  if (typeof newPassword !== 'string' || newPassword.length < 8) throw new Error('password too short (min 8 chars)')
+  const cleanEmail = String(email).trim().toLowerCase()
+  const now = new Date().toISOString()
+  const link = db.prepare(
+    'SELECT token, expires_at, used FROM magic_links WHERE email = ? AND code = ?'
+  ).get(cleanEmail, String(code).trim())
+  if (!link) throw new Error('invalid code')
+  if (link.used) throw new Error('code already used')
+  if (link.expires_at < now) throw new Error('code expired')
+  db.prepare('UPDATE magic_links SET used = 1 WHERE token = ?').run(link.token)
+  const passwordHash = hashPassword(newPassword)
+  const result = db.prepare('UPDATE accounts SET password_hash = ? WHERE email = ?').run(passwordHash, cleanEmail)
+  if (result.changes === 0) throw new Error('account not found')
+  console.log(`[reset-password] password updated for ${cleanEmail}`)
+}
+
+// Sprint 1A-5: 修改密码（已登录，可选验证旧密码）
+function changePassword(db, accountId, oldPassword, newPassword) {
+  if (typeof newPassword !== 'string' || newPassword.length < 8) throw new Error('password too short (min 8 chars)')
+  const account = db.prepare('SELECT id, password_hash FROM accounts WHERE id = ?').get(accountId)
+  if (!account) throw new Error('account not found')
+  if (account.password_hash && oldPassword) {
+    if (!verifyPassword(oldPassword, account.password_hash)) throw new Error('old password incorrect')
+  }
+  const passwordHash = hashPassword(newPassword)
+  db.prepare('UPDATE accounts SET password_hash = ? WHERE id = ?').run(passwordHash, accountId)
+  console.log(`[change-password] password changed for account_id=${accountId}`)
+}
+
 module.exports = {
   // 保留老 API 名（向后兼容）
   requestMagicLink: requestLoginCode,
@@ -204,4 +235,6 @@ module.exports = {
   loginWithPassword,
   getCurrentSession,
   deleteSession,
+  resetPasswordWithCode,
+  changePassword,
 }
