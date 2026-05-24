@@ -216,11 +216,14 @@ function AddPdfModal({ childName, onAdd, onClose }: {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [query, setQuery] = useState('')
-  const [expandedCats, setExpandedCats] = useState<Set<string>>(new Set())
+  const [expandedSeries, setExpandedSeries] = useState<Set<string>>(new Set())
+  const [expandedLevels, setExpandedLevels] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     setLoading(true); setError('')
-    const url = query.trim() ? `/api/library/list?q=${encodeURIComponent(query.trim())}` : `/api/library/list`
+    const url = query.trim()
+      ? `/api/library/list?q=${encodeURIComponent(query.trim())}`
+      : `/api/library/list`
     fetch(url)
       .then(async r => {
         if (!r.ok) throw new Error(`加载失败 ${r.status}`)
@@ -236,7 +239,7 @@ function AddPdfModal({ childName, onAdd, onClose }: {
 
   const isSearching = query.trim().length > 0
 
-  const grouped = (() => {
+  const itemsByCategory = (() => {
     const map = new Map<string, LibraryItem[]>()
     for (const item of items) {
       const cat = item.category_path || '(未分类)'
@@ -246,13 +249,34 @@ function AddPdfModal({ childName, onAdd, onClose }: {
     return map
   })()
 
-  const toggleCat = (cat: string) => {
-    setExpandedCats(prev => {
+  const seriesMap = (() => {
+    const map = new Map<string, Array<{ level: string; count: number; fullPath: string }>>()
+    for (const cat of categories) {
+      const slashIdx = cat.path.indexOf('/')
+      const series = slashIdx > 0 ? cat.path.slice(0, slashIdx) : cat.path
+      const level  = slashIdx > 0 ? cat.path.slice(slashIdx + 1) : '(根目录)'
+      if (!map.has(series)) map.set(series, [])
+      map.get(series)!.push({ level, count: cat.count, fullPath: cat.path })
+    }
+    return map
+  })()
+
+  const toggleSeries = (s: string) => {
+    setExpandedSeries(prev => {
       const next = new Set(prev)
-      if (next.has(cat)) next.delete(cat); else next.add(cat)
+      if (next.has(s)) next.delete(s); else next.add(s)
       return next
     })
   }
+  const toggleLevel = (lvl: string) => {
+    setExpandedLevels(prev => {
+      const next = new Set(prev)
+      if (next.has(lvl)) next.delete(lvl); else next.add(lvl)
+      return next
+    })
+  }
+
+  const seriesTotal = (s: string) => (seriesMap.get(s) ?? []).reduce((sum, l) => sum + l.count, 0)
 
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
@@ -261,6 +285,7 @@ function AddPdfModal({ childName, onAdd, onClose }: {
           <h3 className="font-extrabold text-brown-text">为 {childName} 选择起点 PDF</h3>
           <button onClick={onClose} className="text-brown-mute text-xl hover:text-brown-text leading-none">×</button>
         </div>
+
         <div className="px-6 py-3 shrink-0">
           <input
             type="text" placeholder="搜索文件名..." value={query} onChange={e => setQuery(e.target.value)}
@@ -270,9 +295,10 @@ function AddPdfModal({ childName, onAdd, onClose }: {
           <p className="text-[11px] text-brown-mute mt-1">
             {isSearching
               ? `搜索结果 ${items.length} 本`
-              : `公共图书馆共 ${categories.reduce((s, c) => s + c.count, 0)} 本 / ${categories.length} 个分类`}
+              : `共 ${categories.reduce((s, c) => s + c.count, 0)} 本 · ${seriesMap.size} 个作品 · ${categories.length} 个分级`}
           </p>
         </div>
+
         <div className="flex-1 overflow-auto px-3 pb-3">
           {loading && <p className="text-brown-mute text-sm text-center py-8">加载中...</p>}
           {!loading && error && <p className="text-red-500 text-sm text-center py-8">{error}</p>}
@@ -280,39 +306,67 @@ function AddPdfModal({ childName, onAdd, onClose }: {
             <p className="text-brown-mute text-sm text-center py-8">没有匹配的 PDF</p>
           )}
 
-          {/* 搜索模式：扁平列表 */}
+          {/* 搜索模式：扁平列表，按 category_path 显示来源 */}
           {!loading && !error && isSearching && items.map(item => (
             <button key={item.id} onClick={() => onAdd(item.id, item.filename)}
               className="w-full text-left text-sm text-brown-text hover:bg-cream rounded-[8px] px-3 py-2 flex items-center gap-2">
               <span className="shrink-0 text-brown-faint text-[11px] w-12 tabular-nums">#{item.id}</span>
               <span className="truncate flex-1">{item.filename}</span>
-              {item.category_path && <span className="shrink-0 text-[10px] text-brown-faint">{item.category_path}</span>}
+              {item.category_path && (
+                <span className="shrink-0 text-[10px] text-brown-faint truncate max-w-[180px]">
+                  {item.category_path}
+                </span>
+              )}
             </button>
           ))}
 
-          {/* 非搜索模式：分类折叠 */}
-          {!loading && !error && !isSearching && Array.from(grouped.entries()).map(([cat, list]) => (
-            <div key={cat} className="mb-1">
-              <button onClick={() => toggleCat(cat)}
-                className="w-full text-left bg-cream/60 hover:bg-cream rounded-[8px] px-3 py-2
-                  flex items-center justify-between font-extrabold text-sm text-brown-text">
+          {/* 非搜索模式：两级嵌套树 */}
+          {!loading && !error && !isSearching && Array.from(seriesMap.entries()).map(([series, levels]) => (
+            <div key={series} className="mb-2">
+              {/* 一级：作品 */}
+              <button onClick={() => toggleSeries(series)}
+                className="w-full text-left bg-cream/80 hover:bg-cream rounded-[10px] px-3 py-2.5
+                  flex items-center justify-between font-extrabold text-brown-text">
                 <span className="flex items-center gap-2">
-                  <span className="text-brown-faint">{expandedCats.has(cat) ? '▼' : '▶'}</span>
-                  <span>{cat}</span>
+                  <span className="text-brown-faint w-3">{expandedSeries.has(series) ? '▼' : '▶'}</span>
+                  <span className="text-[15px]">{series}</span>
                 </span>
-                <span className="text-[11px] text-brown-mute font-bold">{list.length} 本</span>
+                <span className="text-[11px] text-brown-mute font-bold">
+                  {seriesTotal(series)} 本 · {levels.length} 级
+                </span>
               </button>
-              {expandedCats.has(cat) && (
-                <ul className="mt-1 ml-4 space-y-0.5">
-                  {list.map(item => (
-                    <li key={item.id}>
-                      <button onClick={() => onAdd(item.id, item.filename)}
-                        className="w-full text-left text-sm text-brown-text hover:bg-cream rounded-[8px] px-3 py-1.5">
-                        {item.filename}
+
+              {/* 二级：级别（仅当作品展开时显示） */}
+              {expandedSeries.has(series) && (
+                <div className="ml-4 mt-1 space-y-0.5">
+                  {levels.map(({ level, count, fullPath }) => (
+                    <div key={fullPath}>
+                      <button onClick={() => toggleLevel(fullPath)}
+                        className="w-full text-left bg-cream/40 hover:bg-cream/70 rounded-[8px] px-3 py-1.5
+                          flex items-center justify-between text-sm font-bold text-brown-text">
+                        <span className="flex items-center gap-2">
+                          <span className="text-brown-faint w-3 text-[10px]">{expandedLevels.has(fullPath) ? '▼' : '▶'}</span>
+                          <span>{level}</span>
+                        </span>
+                        <span className="text-[11px] text-brown-mute">{count} 本</span>
                       </button>
-                    </li>
+
+                      {/* 三级：PDF 文件（仅当级别展开时显示） */}
+                      {expandedLevels.has(fullPath) && (
+                        <ul className="ml-6 mt-1 mb-1 space-y-0.5">
+                          {(itemsByCategory.get(fullPath) ?? []).map(item => (
+                            <li key={item.id}>
+                              <button onClick={() => onAdd(item.id, item.filename)}
+                                className="w-full text-left text-sm text-brown-text hover:bg-cream rounded-[6px] px-3 py-1">
+                                {item.filename}
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
                   ))}
-                </ul>
+                </div>
               )}
             </div>
           ))}
