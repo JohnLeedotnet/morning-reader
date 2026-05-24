@@ -171,28 +171,36 @@ app.get('/api/children/:id/pool', (req, res) => {
   }
 });
 
-// Sprint 0B': 图书馆列表（家长面板"更换起点"对话框用）
+// Sprint UI-6b: 图书馆列表 + 分类（家长面板"更换起点"对话框用）
+// q: 按 filename 模糊搜索（可选，搜索时返回扁平 items）
+// category: 按 category_path 过滤（可选）
+// 始终返回 categories 数组（DISTINCT category_path + count），供 UI 折叠浏览
 app.get('/api/library/list', (req, res) => {
   try {
     const q = (req.query.q || '').trim()
-    let rows
-    if (q) {
-      rows = db.prepare(`
-        SELECT id, sha256, filename, title, size_bytes, is_private, is_builtin
-        FROM pdf_library
-        WHERE filename LIKE ?
-        ORDER BY filename
-        LIMIT 2000
-      `).all(`%${q}%`)
-    } else {
-      rows = db.prepare(`
-        SELECT id, sha256, filename, title, size_bytes, is_private, is_builtin
-        FROM pdf_library
-        ORDER BY filename
-        LIMIT 2000
-      `).all()
-    }
-    res.json({ items: rows, total: rows.length })
+    const cat = (req.query.category || '').trim()
+    const where = []
+    const params = []
+    if (q)   { where.push('filename LIKE ?'); params.push(`%${q}%`) }
+    if (cat) { where.push('category_path = ?'); params.push(cat) }
+    const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : ''
+
+    const items = db.prepare(`
+      SELECT id, sha256, filename, title, size_bytes, is_private, is_builtin, category_path
+      FROM pdf_library
+      ${whereClause}
+      ORDER BY category_path, filename
+      LIMIT 2000
+    `).all(...params)
+
+    const categories = db.prepare(`
+      SELECT COALESCE(category_path, '(未分类)') AS path, COUNT(*) AS count
+      FROM pdf_library
+      GROUP BY COALESCE(category_path, '(未分类)')
+      ORDER BY path
+    `).all()
+
+    res.json({ items, total: items.length, categories })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }

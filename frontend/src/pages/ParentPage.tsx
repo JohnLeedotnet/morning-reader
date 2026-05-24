@@ -41,7 +41,10 @@ interface LibraryItem {
   size_bytes?: number
   is_private: number
   is_builtin: number
+  category_path?: string | null
 }
+
+interface Category { path: string; count: number }
 
 const REC_STATUS: Record<string, { label: string; cls: string }> = {
   scheduled: { label: '已安排',       cls: 'bg-blue-100 text-blue-700' },
@@ -209,44 +212,66 @@ function AddPdfModal({ childName, onAdd, onClose }: {
   onClose: () => void
 }) {
   const [items, setItems] = useState<LibraryItem[]>([])
+  const [categories, setCategories] = useState<Category[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [query, setQuery] = useState('')
+  const [expandedCats, setExpandedCats] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     setLoading(true); setError('')
-    const url = query.trim()
-      ? `/api/library/list?q=${encodeURIComponent(query.trim())}`
-      : `/api/library/list`
+    const url = query.trim() ? `/api/library/list?q=${encodeURIComponent(query.trim())}` : `/api/library/list`
     fetch(url)
       .then(async r => {
         if (!r.ok) throw new Error(`加载失败 ${r.status}`)
         return r.json()
       })
-      .then((data: { items: LibraryItem[]; total: number }) => setItems(data.items))
+      .then((data: { items: LibraryItem[]; categories: Category[] }) => {
+        setItems(data.items)
+        setCategories(data.categories || [])
+      })
       .catch(e => setError(e.message || '网络错误'))
       .finally(() => setLoading(false))
   }, [query])
 
+  const isSearching = query.trim().length > 0
+
+  const grouped = (() => {
+    const map = new Map<string, LibraryItem[]>()
+    for (const item of items) {
+      const cat = item.category_path || '(未分类)'
+      if (!map.has(cat)) map.set(cat, [])
+      map.get(cat)!.push(item)
+    }
+    return map
+  })()
+
+  const toggleCat = (cat: string) => {
+    setExpandedCats(prev => {
+      const next = new Set(prev)
+      if (next.has(cat)) next.delete(cat); else next.add(cat)
+      return next
+    })
+  }
+
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
-         onClick={onClose}>
-      <div className="bg-white rounded-[24px] max-w-2xl w-full max-h-[80vh] flex flex-col"
-           onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-[24px] max-w-2xl w-full max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
         <div className="px-6 py-4 border-b border-cream-card flex items-center justify-between shrink-0">
           <h3 className="font-extrabold text-brown-text">为 {childName} 选择起点 PDF</h3>
           <button onClick={onClose} className="text-brown-mute text-xl hover:text-brown-text leading-none">×</button>
         </div>
         <div className="px-6 py-3 shrink-0">
           <input
-            type="text"
-            placeholder="搜索文件名..."
-            value={query}
-            onChange={e => setQuery(e.target.value)}
+            type="text" placeholder="搜索文件名..." value={query} onChange={e => setQuery(e.target.value)}
             className="w-full bg-cream rounded-[10px] px-3 py-2 text-sm text-brown-text
               border-2 border-transparent focus:border-peach outline-none transition-colors"
           />
-          <p className="text-[11px] text-brown-mute mt-1">公共图书馆共 {items.length} 本{query ? '（搜索结果）' : ''}</p>
+          <p className="text-[11px] text-brown-mute mt-1">
+            {isSearching
+              ? `搜索结果 ${items.length} 本`
+              : `公共图书馆共 ${categories.reduce((s, c) => s + c.count, 0)} 本 / ${categories.length} 个分类`}
+          </p>
         </div>
         <div className="flex-1 overflow-auto px-3 pb-3">
           {loading && <p className="text-brown-mute text-sm text-center py-8">加载中...</p>}
@@ -254,18 +279,43 @@ function AddPdfModal({ childName, onAdd, onClose }: {
           {!loading && !error && items.length === 0 && (
             <p className="text-brown-mute text-sm text-center py-8">没有匹配的 PDF</p>
           )}
-          <ul className="space-y-0.5">
-            {items.map(item => (
-              <li key={item.id}>
-                <button onClick={() => onAdd(item.id, item.filename)}
-                  className="w-full text-left text-sm text-brown-text hover:bg-cream rounded-[8px] px-3 py-2 flex items-center gap-2">
-                  <span className="shrink-0 text-brown-faint text-[11px] w-12 tabular-nums">#{item.id}</span>
-                  <span className="truncate flex-1">{item.filename}</span>
-                  {item.is_private ? <span className="shrink-0 text-[10px] text-brown-faint">🔒</span> : null}
-                </button>
-              </li>
-            ))}
-          </ul>
+
+          {/* 搜索模式：扁平列表 */}
+          {!loading && !error && isSearching && items.map(item => (
+            <button key={item.id} onClick={() => onAdd(item.id, item.filename)}
+              className="w-full text-left text-sm text-brown-text hover:bg-cream rounded-[8px] px-3 py-2 flex items-center gap-2">
+              <span className="shrink-0 text-brown-faint text-[11px] w-12 tabular-nums">#{item.id}</span>
+              <span className="truncate flex-1">{item.filename}</span>
+              {item.category_path && <span className="shrink-0 text-[10px] text-brown-faint">{item.category_path}</span>}
+            </button>
+          ))}
+
+          {/* 非搜索模式：分类折叠 */}
+          {!loading && !error && !isSearching && Array.from(grouped.entries()).map(([cat, list]) => (
+            <div key={cat} className="mb-1">
+              <button onClick={() => toggleCat(cat)}
+                className="w-full text-left bg-cream/60 hover:bg-cream rounded-[8px] px-3 py-2
+                  flex items-center justify-between font-extrabold text-sm text-brown-text">
+                <span className="flex items-center gap-2">
+                  <span className="text-brown-faint">{expandedCats.has(cat) ? '▼' : '▶'}</span>
+                  <span>{cat}</span>
+                </span>
+                <span className="text-[11px] text-brown-mute font-bold">{list.length} 本</span>
+              </button>
+              {expandedCats.has(cat) && (
+                <ul className="mt-1 ml-4 space-y-0.5">
+                  {list.map(item => (
+                    <li key={item.id}>
+                      <button onClick={() => onAdd(item.id, item.filename)}
+                        className="w-full text-left text-sm text-brown-text hover:bg-cream rounded-[8px] px-3 py-1.5">
+                        {item.filename}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ))}
         </div>
       </div>
     </div>

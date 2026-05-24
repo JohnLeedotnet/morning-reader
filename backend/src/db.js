@@ -249,4 +249,8 @@ try {
   }
 } catch (e) { console.error('Sprint 1A email seed:', e.message) }
 
+// Sprint UI-6b: 恢复 PDF 分类层级
+try { db.exec('ALTER TABLE pdf_library ADD COLUMN category_path TEXT') } catch (e) {}
+try { db.exec('CREATE INDEX IF NOT EXISTS idx_pdf_library_category ON pdf_library(category_path)') } catch (e) {}
+
 module.exports = db;
