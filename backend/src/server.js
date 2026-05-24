@@ -146,9 +146,12 @@ app.post('/api/auth/login/password', (req, res) => {
 app.get('/api/auth/me', (req, res) => {
   const session = auth.getCurrentSession(db, req.cookies?.auth_token)
   if (!session) return res.status(401).json({ error: 'not authenticated' })
+  // Sprint 1A-6: 加 username 字段
+  const account = db.prepare('SELECT username FROM accounts WHERE id = ?').get(session.account_id)
   res.json({
     account_id: session.account_id,
     email: session.email,
+    username: account?.username || null,
     is_superadmin: session.is_superadmin === 1,
     is_anonymous: session.is_anonymous === 1,
   })
@@ -179,6 +182,20 @@ app.post('/api/auth/forgot-password/reset', (req, res) => {
     const { email, code, newPassword } = req.body
     if (!email || !code || !newPassword) return res.status(400).json({ error: 'email, code, newPassword required' })
     auth.resetPasswordWithCode(db, email, code, newPassword)
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+// Sprint 1A-6: 改用户名（已登录）
+app.post('/api/auth/set-username', (req, res) => {
+  try {
+    const session = auth.getCurrentSession(db, req.cookies?.auth_token)
+    if (!session) return res.status(401).json({ error: 'not authenticated' })
+    const { username } = req.body
+    if (!username) return res.status(400).json({ error: 'username required' })
+    auth.setUsername(db, session.account_id, username)
     res.json({ ok: true })
   } catch (err) {
     res.status(400).json({ error: err.message })

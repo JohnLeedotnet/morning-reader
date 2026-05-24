@@ -12,7 +12,6 @@ import GamePage from './pages/GamePage'
 import DiscardedPage from './pages/DiscardedPage'
 import RegisterPage from './pages/RegisterPage'
 import ForgotPasswordPage from './pages/ForgotPasswordPage'
-import ProfilePage from './pages/ProfilePage'
 
 export default function App() {
   return (
@@ -22,7 +21,6 @@ export default function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-        <Route path="/profile" element={<ProfilePage />} />
         <Route path="/discarded" element={<DiscardedPage />} />
         <Route path="/reading/:childId" element={<ReadingPage />} />
         <Route path="/recitation/:childId" element={<RecitationPage />} />

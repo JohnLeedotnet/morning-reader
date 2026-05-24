@@ -211,6 +211,18 @@ function resetPasswordWithCode(db, email, code, newPassword) {
   console.log(`[reset-password] password updated for ${cleanEmail}`)
 }
 
+// Sprint 1A-6: 已登录用户改用户名（null 也允许首次设置）
+function setUsername(db, accountId, username) {
+  if (!isValidUsername(username)) {
+    throw new Error('invalid username (3-32 chars: a-z, A-Z, 0-9, _, -)')
+  }
+  const taken = db.prepare('SELECT id FROM accounts WHERE username = ? AND id != ?').get(username, accountId)
+  if (taken) throw new Error('username already taken')
+  db.prepare('UPDATE accounts SET username = ? WHERE id = ?').run(username, accountId)
+  console.log(`[set-username] account_id=${accountId} username='${username}'`)
+  return { ok: true }
+}
+
 // Sprint 1A-5: 修改密码（已登录，可选验证旧密码）
 function changePassword(db, accountId, oldPassword, newPassword) {
   if (typeof newPassword !== 'string' || newPassword.length < 8) throw new Error('password too short (min 8 chars)')
@@ -237,4 +249,5 @@ module.exports = {
   deleteSession,
   resetPasswordWithCode,
   changePassword,
+  setUsername,
 }

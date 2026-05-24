@@ -444,6 +444,158 @@ function PoolChildCard({ childName, cursor, cursorFilename, count, minDurationMi
   )
 }
 
+// ── Sprint 1A-6: 用户管理 card ─────────────────────────────────────────────────
+
+interface MeData {
+  account_id: number
+  email: string
+  username: string | null
+  is_superadmin: boolean
+}
+
+function UserSettingsCard() {
+  const [me, setMe] = useState<MeData | null | undefined>(undefined)
+  const [editingUsername, setEditingUsername] = useState(false)
+  const [editingPassword, setEditingPassword] = useState(false)
+  const [usernameInput, setUsernameInput] = useState('')
+  const [oldPassword, setOldPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [newPassword2, setNewPassword2] = useState('')
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+
+  const loadMe = () => {
+    fetch('/api/auth/me')
+      .then(r => r.ok ? r.json() : null)
+      .then(setMe)
+      .catch(() => setMe(null))
+  }
+  useEffect(loadMe, [])
+
+  const saveUsername = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setSubmitting(true); setError(''); setSuccess('')
+    try {
+      const res = await fetch('/api/auth/set-username', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: usernameInput.trim() }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error((d as { error?: string }).error || `修改失败 ${res.status}`)
+      }
+      setSuccess('用户名修改成功')
+      setEditingUsername(false); setUsernameInput('')
+      loadMe()
+    } catch (err: unknown) { setError(err instanceof Error ? err.message : '网络错误') }
+    finally { setSubmitting(false) }
+  }
+
+  const savePassword = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (newPassword !== newPassword2) { setError('两次密码不一致'); return }
+    if (newPassword.length < 8) { setError('新密码至少 8 位'); return }
+    setSubmitting(true); setError(''); setSuccess('')
+    try {
+      const res = await fetch('/api/auth/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ oldPassword, newPassword }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error((d as { error?: string }).error || `修改失败 ${res.status}`)
+      }
+      setSuccess('密码修改成功')
+      setEditingPassword(false); setOldPassword(''); setNewPassword(''); setNewPassword2('')
+    } catch (err: unknown) { setError(err instanceof Error ? err.message : '网络错误') }
+    finally { setSubmitting(false) }
+  }
+
+  if (me === undefined || !me) return null
+
+  return (
+    <div className="bg-white rounded-[16px] p-5 mb-4 shadow-[0_2px_12px_rgba(224,122,95,0.08)]">
+      <h3 className="font-extrabold text-brown-text mb-3 flex items-center gap-2">
+        👤 用户管理
+        {me.is_superadmin && <span className="text-[11px] text-peach-deep font-bold">👑 超级管理员</span>}
+      </h3>
+
+      {/* 账户信息 */}
+      <div className="bg-cream rounded-[10px] p-3 mb-3 text-sm space-y-1">
+        <div className="flex justify-between gap-2">
+          <span className="text-brown-mute">邮箱：</span>
+          <span className="font-bold text-brown-text break-all">{me.email}</span>
+        </div>
+        <div className="flex justify-between gap-2">
+          <span className="text-brown-mute">用户名：</span>
+          <span className="font-bold text-brown-text">
+            {me.username || <span className="text-brown-faint italic">（未设置）</span>}
+          </span>
+        </div>
+      </div>
+
+      {(error || success) && (
+        <p className={`text-sm mb-2 ${error ? 'text-red-500' : 'text-mint font-bold'}`}>
+          {error || success}
+        </p>
+      )}
+
+      {/* 修改用户名 */}
+      {!editingUsername ? (
+        <button onClick={() => { setEditingUsername(true); setUsernameInput(me.username || ''); setError(''); setSuccess('') }}
+          className="w-full text-left bg-cream/60 hover:bg-cream rounded-[10px] px-3 py-2 mb-2 text-sm font-bold text-brown-text">
+          ✏️ {me.username ? '修改用户名' : '设置用户名'}
+        </button>
+      ) : (
+        <form onSubmit={saveUsername} className="bg-cream/40 rounded-[10px] p-3 mb-2 space-y-2">
+          <input type="text" required placeholder="用户名（3-32 位，字母/数字/_/-）" value={usernameInput}
+            onChange={e => setUsernameInput(e.target.value)} pattern="[a-zA-Z0-9_-]{3,32}"
+            className="w-full bg-white rounded-[8px] px-3 py-2 text-sm border-2 border-transparent focus:border-peach outline-none" />
+          <div className="flex gap-2">
+            <button type="submit" disabled={submitting}
+              className="flex-1 bg-peach text-white py-2 rounded-[8px] text-sm font-extrabold disabled:opacity-40">
+              {submitting ? '保存中...' : '保存'}
+            </button>
+            <button type="button" onClick={() => { setEditingUsername(false); setError('') }}
+              className="px-4 bg-cream text-brown-mute py-2 rounded-[8px] text-sm font-bold">取消</button>
+          </div>
+        </form>
+      )}
+
+      {/* 修改密码 */}
+      {!editingPassword ? (
+        <button onClick={() => { setEditingPassword(true); setError(''); setSuccess('') }}
+          className="w-full text-left bg-cream/60 hover:bg-cream rounded-[10px] px-3 py-2 text-sm font-bold text-brown-text">
+          🔒 修改密码
+        </button>
+      ) : (
+        <form onSubmit={savePassword} className="bg-cream/40 rounded-[10px] p-3 space-y-2">
+          <input type="password" placeholder="当前密码（首次设置可空）" value={oldPassword}
+            onChange={e => setOldPassword(e.target.value)}
+            className="w-full bg-white rounded-[8px] px-3 py-2 text-sm border-2 border-transparent focus:border-peach outline-none" />
+          <input type="password" required placeholder="新密码（至少 8 位）" value={newPassword}
+            onChange={e => setNewPassword(e.target.value)} minLength={8}
+            className="w-full bg-white rounded-[8px] px-3 py-2 text-sm border-2 border-transparent focus:border-peach outline-none" />
+          <input type="password" required placeholder="再输一次新密码" value={newPassword2}
+            onChange={e => setNewPassword2(e.target.value)}
+            className="w-full bg-white rounded-[8px] px-3 py-2 text-sm border-2 border-transparent focus:border-peach outline-none" />
+          <div className="flex gap-2">
+            <button type="submit" disabled={submitting}
+              className="flex-1 bg-peach text-white py-2 rounded-[8px] text-sm font-extrabold disabled:opacity-40">
+              {submitting ? '保存中...' : '保存'}
+            </button>
+            <button type="button" onClick={() => { setEditingPassword(false); setError('') }}
+              className="px-4 bg-cream text-brown-mute py-2 rounded-[8px] text-sm font-bold">取消</button>
+          </div>
+        </form>
+      )}
+    </div>
+  )
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function ParentPage() {
@@ -806,6 +958,8 @@ export default function ParentPage() {
       </div>
 
       <div className="max-w-4xl mx-auto p-6">
+        <UserSettingsCard />
+
         {/* Tabs */}
         <div className="flex gap-2 mb-6">
           <button onClick={() => setTab('review')}
@@ -1038,12 +1192,12 @@ export default function ParentPage() {
             <div className="flex items-center justify-between">
               <div>
                 <h2 className="text-xl font-extrabold text-brown-text">用户管理</h2>
-                <p className="text-sm text-brown-mute mt-0.5">添加、查看、删除朗读用户</p>
+                <p className="text-sm text-brown-mute mt-0.5">添加、查看、删除朗读角色</p>
               </div>
               <button onClick={() => setAddUserOpen(true)}
                 className="bg-peach text-white font-extrabold px-5 py-3 rounded-[14px]
                   hover:opacity-90 transition-opacity text-sm">
-                + 添加用户
+                + 添加角色
               </button>
             </div>
 
@@ -1073,7 +1227,7 @@ export default function ParentPage() {
               ))}
               {allChildren.length === 0 && (
                 <p className="text-center text-brown-mute py-8 text-sm">
-                  尚未添加用户，点击右上角「+ 添加用户」开始
+                  尚未添加角色，点击右上角「+ 添加角色」开始
                 </p>
               )}
             </div>
@@ -1110,7 +1264,7 @@ export default function ParentPage() {
              onClick={() => setAddUserOpen(false)}>
           <div className="bg-white rounded-[24px] max-w-sm w-full p-6"
                onClick={e => e.stopPropagation()}>
-            <h3 className="font-extrabold text-brown-text text-lg mb-4">添加用户</h3>
+            <h3 className="font-extrabold text-brown-text text-lg mb-4">添加角色</h3>
             <div className="space-y-3">
               <div>
                 <label className="text-sm font-extrabold text-brown-text mb-1 block">姓名</label>
