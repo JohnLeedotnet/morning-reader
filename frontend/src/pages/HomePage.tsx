@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 
 interface Child {
   id: string
@@ -128,13 +128,75 @@ function ChildCard({ child, recitationPlan, config }: {
   )
 }
 
+function AccountDropdown({ authMe, onLogout }: {
+  authMe: { email: string; username: string | null; is_superadmin: boolean }
+  onLogout: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const navigate = useNavigate()
+
+  useEffect(() => {
+    if (!open) return
+    const close = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement).closest('[data-account-dropdown]')) setOpen(false)
+    }
+    document.addEventListener('click', close)
+    return () => document.removeEventListener('click', close)
+  }, [open])
+
+  const displayName = authMe.username || authMe.email.split('@')[0]
+  const avatarLetter = (authMe.username || authMe.email)[0].toUpperCase()
+
+  return (
+    <div data-account-dropdown className="absolute top-6 right-6 z-50">
+      <button onClick={() => setOpen(!open)}
+        className="flex items-center gap-2 bg-white hover:bg-cream-card rounded-full pl-1 pr-3 py-1
+          shadow-[0_2px_8px_rgba(224,122,95,0.10)] border border-cream-card text-sm font-bold
+          active:scale-95 transition-transform">
+        <span className="w-7 h-7 rounded-full bg-peach text-white flex items-center justify-center text-xs font-extrabold shrink-0">
+          {avatarLetter}
+        </span>
+        <span className="text-brown-text truncate max-w-[120px]">{displayName}</span>
+        {authMe.is_superadmin && <span className="text-[11px] shrink-0">👑</span>}
+        <span className="text-brown-faint text-xs shrink-0">▾</span>
+      </button>
+
+      {open && (
+        <div className="absolute top-full right-0 mt-2 w-64 bg-white rounded-[14px]
+          shadow-[0_8px_32px_rgba(0,0,0,0.12)] border border-cream-card overflow-hidden">
+          <div className="px-4 py-3 bg-cream/40 border-b border-cream-card">
+            <p className="text-[11px] text-brown-mute font-bold">已登录账户</p>
+            <p className="text-sm font-extrabold text-brown-text break-all mt-0.5">{authMe.email}</p>
+            {authMe.username && (
+              <p className="text-[11px] text-brown-mute mt-0.5">用户名：<span className="font-bold text-brown-text">{authMe.username}</span></p>
+            )}
+            {authMe.is_superadmin && (
+              <p className="text-[11px] text-peach-deep font-bold mt-1">👑 超级管理员</p>
+            )}
+          </div>
+          <button onClick={() => { setOpen(false); navigate('/parent') }}
+            className="w-full text-left px-4 py-3 text-sm hover:bg-cream font-bold text-brown-text
+              flex items-center gap-2 transition-colors">
+            <span className="text-base">⚙️</span> 用户设置
+          </button>
+          <button onClick={() => { setOpen(false); onLogout() }}
+            className="w-full text-left px-4 py-3 text-sm hover:bg-cream font-bold text-brown-text
+              border-t border-cream-card flex items-center gap-2 transition-colors">
+            <span className="text-base">↪️</span> 退出登录
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function HomePage() {
   const [children,        setChildren]        = useState<Child[]>([])
   const [recitationPlans, setRecitationPlans] = useState<Record<string, RecPlan | null>>({})
   const [config,          setConfig]          = useState<Config | null>(null)
   const [error,           setError]           = useState('')
   // Sprint 1A-3: 三态 — undefined=加载中 / null=未登录 / object=已登录
-  const [authMe,          setAuthMe]          = useState<{ email: string; is_superadmin: boolean } | null | undefined>(undefined)
+  const [authMe,          setAuthMe]          = useState<{ email: string; username: string | null; is_superadmin: boolean } | null | undefined>(undefined)
 
   useEffect(() => {
     fetch('/api/auth/me')
@@ -207,24 +269,10 @@ export default function HomePage() {
   // authMe 已登录，往下走正常 HomePage 渲染
   return (
     <div className="relative min-h-screen bg-cream flex flex-col items-center px-6 pt-10 pb-16">
-      <Link to="/parent" className="absolute top-6 right-6 text-brown-faint text-sm font-extrabold hover:text-peach">
-        ⚙️ 用户设置
-      </Link>
+      <AccountDropdown authMe={authMe!} onLogout={handleLogout} />
       <h1 className="text-[30px] font-extrabold text-brown-text tracking-tight mb-8">
         Morning Reader
       </h1>
-
-      {/* 账户区 */}
-      <div className="w-full max-w-3xl mb-4 flex justify-end items-center gap-3 text-sm">
-        {authMe ? (
-          <>
-            <span className="text-brown-mute">已登录 <span className="font-extrabold text-brown-text">{authMe.email}</span>{authMe.is_superadmin ? ' 👑' : ''}</span>
-            <button onClick={handleLogout} className="text-peach hover:text-peach-deep font-bold">退出</button>
-          </>
-        ) : (
-          <Link to="/login" className="text-peach hover:text-peach-deep font-bold">登录</Link>
-        )}
-      </div>
 
       {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
       {children.length === 0 && !error && (
