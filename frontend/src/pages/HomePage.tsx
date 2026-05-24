@@ -133,7 +133,8 @@ export default function HomePage() {
   const [recitationPlans, setRecitationPlans] = useState<Record<string, RecPlan | null>>({})
   const [config,          setConfig]          = useState<Config | null>(null)
   const [error,           setError]           = useState('')
-  const [authMe,          setAuthMe]          = useState<{ email: string; is_superadmin: boolean } | null>(null)
+  // Sprint 1A-3: 三态 — undefined=加载中 / null=未登录 / object=已登录
+  const [authMe,          setAuthMe]          = useState<{ email: string; is_superadmin: boolean } | null | undefined>(undefined)
 
   useEffect(() => {
     fetch('/api/auth/me')
@@ -148,6 +149,8 @@ export default function HomePage() {
   }
 
   useEffect(() => {
+    // Sprint 1A-3: 仅已登录时拉 children/config
+    if (!authMe) return
     Promise.all([
       fetch('/api/children').then(r => r.json()),
       fetch('/api/config').then(r => r.json()),
@@ -165,8 +168,40 @@ export default function HomePage() {
       setChildren(childrenData)
       setRecitationPlans(plans)
     }).catch(e => setError((e as Error).message))
-  }, [])
+  }, [authMe])
 
+  // Sprint 1A-3: 鉴权状态分支
+  if (authMe === undefined) {
+    return (
+      <div className="min-h-screen bg-cream flex items-center justify-center">
+        <p className="text-brown-mute">加载中...</p>
+      </div>
+    )
+  }
+
+  if (authMe === null) {
+    return (
+      <div className="min-h-screen bg-cream flex flex-col items-center justify-center p-8">
+        <div className="bg-white rounded-[24px] p-10 max-w-md w-full shadow-[0_4px_24px_rgba(224,122,95,0.10)] text-center">
+          <h1 className="text-3xl font-black text-brown-text mb-3">🌅 Morning Reader</h1>
+          <p className="text-brown-mute text-sm mb-6 leading-relaxed">
+            家庭晨读管理工具<br />
+            家长监督孩子英文朗读 + 录音 + 审核
+          </p>
+          <Link to="/login"
+            className="inline-block bg-peach text-white font-extrabold px-8 py-3 rounded-[14px]
+              hover:opacity-90 transition-opacity">
+            登录 / 注册
+          </Link>
+          <p className="text-[11px] text-brown-faint mt-6">
+            输入邮箱即可，无需密码
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  // authMe 已登录，往下走正常 HomePage 渲染
   return (
     <div className="relative min-h-screen bg-cream flex flex-col items-center px-6 pt-10 pb-16">
       <Link to="/parent" className="absolute top-6 right-6 text-brown-faint text-sm font-extrabold hover:text-peach">

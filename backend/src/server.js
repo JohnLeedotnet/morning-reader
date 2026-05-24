@@ -139,12 +139,18 @@ app.get('/test', (req, res) => {
 
 app.get('/api/children', (req, res) => {
   try {
+    // Sprint 1A-3: 必须登录 + 按 account_id 过滤
+    const authSession = auth.getCurrentSession(db, req.cookies?.auth_token)
+    if (!authSession) return res.status(401).json({ error: 'not authenticated' })
+    const accountId = authSession.account_id
+
     const today = todayLocal();
     const children = db.prepare(`
       SELECT c.*, l.filename AS cursor_filename
       FROM children c
       LEFT JOIN pdf_library l ON l.id = c.cursor_library_id
-    `).all();
+      WHERE c.account_id = ?
+    `).all(accountId);
     const result = children.map(child => {
       const session = db.prepare(
         'SELECT status, pdfs_required FROM reading_sessions WHERE child_id = ? AND date = ? ORDER BY id DESC LIMIT 1'
