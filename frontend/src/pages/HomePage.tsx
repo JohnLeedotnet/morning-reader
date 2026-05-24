@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import OnboardingWizard from './OnboardingWizard'
 
 interface Child {
   id: string
@@ -192,6 +193,7 @@ function AccountDropdown({ authMe, onLogout }: {
 
 export default function HomePage() {
   const [children,        setChildren]        = useState<Child[]>([])
+  const [childrenLoaded,  setChildrenLoaded]  = useState(false)
   const [recitationPlans, setRecitationPlans] = useState<Record<string, RecPlan | null>>({})
   const [config,          setConfig]          = useState<Config | null>(null)
   const [error,           setError]           = useState('')
@@ -229,7 +231,8 @@ export default function HomePage() {
       )
       setChildren(childrenData)
       setRecitationPlans(plans)
-    }).catch(e => setError((e as Error).message))
+      setChildrenLoaded(true)
+    }).catch(e => { setError((e as Error).message); setChildrenLoaded(true) })
   }, [authMe])
 
   // Sprint 1A-3: 鉴权状态分支
@@ -263,6 +266,19 @@ export default function HomePage() {
           </p>
         </div>
       </div>
+    )
+  }
+
+  // Sprint 1C: 新用户无角色 → 显示引导向导
+  if (childrenLoaded && children.length === 0 && !error) {
+    return (
+      <OnboardingWizard authMe={authMe!} onDone={() => {
+        setChildrenLoaded(false)
+        fetch('/api/children')
+          .then(r => r.ok ? r.json() : [])
+          .then((d: Child[]) => { setChildren(d); setChildrenLoaded(true) })
+          .catch(() => setChildrenLoaded(true))
+      }} />
     )
   }
 

@@ -261,6 +261,21 @@ try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_username ON accoun
 // Sprint 1A-4: magic_links 加 6 位验证码字段
 try { db.exec('ALTER TABLE magic_links ADD COLUMN code TEXT') } catch (e) {}
 
+// Sprint 1C: 时间窗口改 per account（之前在全局 config 表）
+try { db.exec("ALTER TABLE accounts ADD COLUMN window_start TEXT DEFAULT '07:00'") } catch (e) {}
+try { db.exec("ALTER TABLE accounts ADD COLUMN window_end TEXT DEFAULT '08:00'") } catch (e) {}
+
+// 迁移：把 config.window_start/end 迁到 Homer 自家 account_id=1
+try {
+  const acct = db.prepare("SELECT window_start, window_end FROM accounts WHERE id = 1").get()
+  if (acct && (!acct.window_start || !acct.window_end)) {
+    const ws = db.prepare("SELECT value FROM config WHERE key = 'window_start'").get()?.value || '07:00'
+    const we = db.prepare("SELECT value FROM config WHERE key = 'window_end'").get()?.value || '08:00'
+    db.prepare("UPDATE accounts SET window_start = ?, window_end = ? WHERE id = 1").run(ws, we)
+    console.log(`[Sprint 1C] Migrated time window account_id=1 → ${ws}-${we}`)
+  }
+} catch (e) { console.error('window migration:', e.message) }
+
 // Sprint 1B: 迁移老 PIN 从 config 表（明文）到 accounts.parent_pin_hash（PBKDF2）
 try {
   const cfg = db.prepare("SELECT value FROM config WHERE key = 'parent_pin'").get()

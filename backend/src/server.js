@@ -350,6 +350,13 @@ app.get('/api/config', (req, res) => {
       if (key === 'parent_pin') config.hasParentPin = value !== '';
       else config[key] = value;
     }
+    // Sprint 1C: override window with account-specific value if logged in
+    const userSession = auth.getCurrentSession(db, req.cookies?.auth_token)
+    if (userSession) {
+      const w = auth.getAccountWindow(db, userSession.account_id)
+      config.window_start = w.window_start
+      config.window_end = w.window_end
+    }
     res.json(config);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -443,9 +450,11 @@ app.post('/api/sessions/:id/complete', upload.single('recording'), (req, res) =>
 
     // Time window check (compare local HH:MM)
     const config = getConfig();
+    const childAcctRow = db.prepare('SELECT account_id FROM children WHERE id = ?').get(session.child_id)
+    const w = auth.getAccountWindow(db, childAcctRow?.account_id)
     const startDate = new Date(session.start_time);
     const startHHMM = `${startDate.getHours().toString().padStart(2, '0')}:${startDate.getMinutes().toString().padStart(2, '0')}`;
-    const timeInWindow = (startHHMM >= config.window_start && startHHMM < config.window_end) ? 1 : 0;
+    const timeInWindow = (startHHMM >= w.window_start && startHHMM < w.window_end) ? 1 : 0;
 
     // Status calculation (priority order)
     const childRow = db.prepare('SELECT min_duration_s FROM children WHERE id = ?').get(session.child_id);
@@ -566,6 +575,25 @@ app.post('/api/auth/set-pin', (req, res) => {
       }
     }
     auth.setParentPin(db, userSession.account_id, newPin)
+    // Sprint 1C: 设完 PIN 后自动解锁家长（向导无缝流程）
+    const { token, expiresAt } = auth.createParentSession(db, userSession.account_id)
+    res.cookie('parent_token', token, {
+      httpOnly: true, sameSite: 'lax',
+      secure: req.protocol === 'https',
+      expires: new Date(expiresAt),
+    })
+    res.json({ ok: true, parent_unlocked: true })
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+// Sprint 1C: 设置时间窗口（需要家长解锁）
+app.post('/api/auth/set-window', requireParent, (req, res) => {
+  try {
+    const { window_start, window_end } = req.body
+    if (!window_start || !window_end) return res.status(400).json({ error: 'window_start and window_end required' })
+    auth.setWindow(db, req.accountId, window_start, window_end)
     res.json({ ok: true })
   } catch (err) {
     res.status(400).json({ error: err.message })
@@ -850,9 +878,11 @@ app.post('/api/recitation/:id/complete', upload.single('recording'), (req, res) 
     }
 
     const config = getConfig()
+    const recChildAcctRow = db.prepare('SELECT account_id FROM children WHERE id = ?').get(session.child_id)
+    const wRec = auth.getAccountWindow(db, recChildAcctRow?.account_id)
     const startDate = new Date(session.start_time)
     const startHHMM = `${startDate.getHours().toString().padStart(2, '0')}:${startDate.getMinutes().toString().padStart(2, '0')}`
-    const timeInWindow = (startHHMM >= config.window_start && startHHMM < config.window_end) ? 1 : 0
+    const timeInWindow = (startHHMM >= wRec.window_start && startHHMM < wRec.window_end) ? 1 : 0
 
     const childRowRec = db.prepare('SELECT min_duration_s FROM children WHERE id = ?').get(session.child_id)
     const minDurRec = (childRowRec?.min_duration_s != null) ? childRowRec.min_duration_s : parseInt(config.min_duration_s)

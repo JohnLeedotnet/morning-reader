@@ -278,6 +278,20 @@ function deleteParentSession(db, parentToken) {
   db.prepare('DELETE FROM parent_sessions WHERE token = ?').run(parentToken)
 }
 
+// Sprint 1C: 设置时间窗口
+function setWindow(db, accountId, windowStart, windowEnd) {
+  if (!/^\d{2}:\d{2}$/.test(windowStart) || !/^\d{2}:\d{2}$/.test(windowEnd)) {
+    throw new Error('window must be HH:MM format')
+  }
+  db.prepare('UPDATE accounts SET window_start = ?, window_end = ? WHERE id = ?').run(windowStart, windowEnd, accountId)
+  console.log(`[set-window] account_id=${accountId} ${windowStart} - ${windowEnd}`)
+}
+
+function getAccountWindow(db, accountId) {
+  const a = db.prepare('SELECT window_start, window_end FROM accounts WHERE id = ?').get(accountId)
+  return { window_start: a?.window_start || '07:00', window_end: a?.window_end || '08:00' }
+}
+
 module.exports = {
   // 保留老 API 名（向后兼容）
   requestMagicLink: requestLoginCode,
@@ -297,4 +311,6 @@ module.exports = {
   createParentSession,
   getCurrentParentSession,
   deleteParentSession,
+  setWindow,
+  getAccountWindow,
 }
