@@ -11,6 +11,24 @@ const adminAuth = require('./adminAuth');
 const cookieParser = require('cookie-parser');
 const auth = require('./authMagicLink');
 
+// Sprint 1A-2: 加载 ~/.morningreader/backend.env（不引入 dotenv 依赖，手动 parse）
+try {
+  const envPath = path.join(require('os').homedir(), '.morningreader', 'backend.env')
+  if (fs.existsSync(envPath)) {
+    for (const line of fs.readFileSync(envPath, 'utf-8').split('\n')) {
+      const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)$/)
+      if (m) {
+        const key = m[1]
+        const val = m[2].trim().replace(/^['"]|['"]$/g, '')
+        if (!process.env[key]) process.env[key] = val
+      }
+    }
+    console.log('[env] loaded ~/.morningreader/backend.env (RESEND_API_KEY:', process.env.RESEND_API_KEY ? '✅ set' : '❌ missing', ')')
+  } else {
+    console.warn('[env] ~/.morningreader/backend.env not found, RESEND will fallback to console.log')
+  }
+} catch (e) { console.warn('[env] failed to load:', e.message) }
+
 const app = express();
 const PORT = 3001;
 
@@ -61,17 +79,16 @@ function getConfig() {
 // ── Sprint 1A: Magic-link auth ────────────────────────────────────────────────
 
 // 发起魔法链接（不暴露 email 是否已注册，防 enumeration）
-app.post('/api/auth/magic-link/request', (req, res) => {
+app.post('/api/auth/magic-link/request', async (req, res) => {
   try {
     const { email } = req.body
     if (!email) return res.status(400).json({ error: 'email required' })
     const baseUrl = process.env.PUBLIC_BASE_URL || 'https://www.morningreader.org'
-    auth.requestMagicLink(db, email, baseUrl)
+    await auth.requestMagicLink(db, email, baseUrl)
     res.json({ ok: true })
   } catch (err) {
-    // 任何错误统一返回成功，防止 email enumeration
     console.warn('[magic-link/request] suppressed error:', err.message)
-    res.json({ ok: true })
+    res.json({ ok: true })  // 静默成功防 email enumeration
   }
 })
 
