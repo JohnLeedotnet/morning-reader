@@ -12,6 +12,7 @@ import GamePage from './pages/GamePage'
 import DiscardedPage from './pages/DiscardedPage'
 import RegisterPage from './pages/RegisterPage'
 import ForgotPasswordPage from './pages/ForgotPasswordPage'
+import LibraryPage from './pages/LibraryPage'
 
 export default function App() {
   return (
@@ -28,6 +29,7 @@ export default function App() {
         <Route path="/history/:childId" element={<HistoryPage />} />
         <Route path="/parent" element={<ParentPage />} />
         <Route path="/game/:gameId" element={<GamePage />} />
+        <Route path="/library" element={<LibraryPage />} />
         <Route path="/mic-test" element={<MicTest />} />
         <Route path="/pdf-test" element={<PdfTest />} />
       </Routes>
