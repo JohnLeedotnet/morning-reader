@@ -296,14 +296,26 @@ app.get('/api/children/:id/pool', (req, res) => {
 // q: 按 filename 模糊搜索（可选，搜索时返回扁平 items）
 // category: 按 category_path 过滤（可选）
 // 始终返回 categories 数组（DISTINCT category_path + count），供 UI 折叠浏览
+// Sprint 2-Hotfix Bug1: 公共图书馆按 is_private/uploader/superadmin 过滤
 app.get('/api/library/list', (req, res) => {
   try {
+    const session = auth.getCurrentSession(db, req.cookies?.auth_token)
+    if (!session) return res.status(401).json({ error: 'not authenticated' })
+    const accountId = session.account_id
+    const isSuperAdmin = session.is_superadmin === 1
+
     const q = (req.query.q || '').trim()
     const cat = (req.query.category || '').trim()
     const where = []
     const params = []
+
+    if (!isSuperAdmin) {
+      where.push('(is_private = 0 OR uploader_account_id = ?)')
+      params.push(accountId)
+    }
     if (q)   { where.push('filename LIKE ?'); params.push(`%${q}%`) }
     if (cat) { where.push('category_path = ?'); params.push(cat) }
+
     const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : ''
 
     const items = db.prepare(`
@@ -314,12 +326,20 @@ app.get('/api/library/list', (req, res) => {
       LIMIT 2000
     `).all(...params)
 
-    const categories = db.prepare(`
-      SELECT COALESCE(category_path, '(未分类)') AS path, COUNT(*) AS count
-      FROM pdf_library
-      GROUP BY COALESCE(category_path, '(未分类)')
-      ORDER BY path
-    `).all()
+    const categories = isSuperAdmin
+      ? db.prepare(`
+          SELECT COALESCE(category_path, '(未分类)') AS path, COUNT(*) AS count
+          FROM pdf_library
+          GROUP BY COALESCE(category_path, '(未分类)')
+          ORDER BY path
+        `).all()
+      : db.prepare(`
+          SELECT COALESCE(category_path, '(未分类)') AS path, COUNT(*) AS count
+          FROM pdf_library
+          WHERE is_private = 0 OR uploader_account_id = ?
+          GROUP BY COALESCE(category_path, '(未分类)')
+          ORDER BY path
+        `).all(accountId)
 
     res.json({ items, total: items.length, categories })
   } catch (err) {
@@ -327,11 +347,26 @@ app.get('/api/library/list', (req, res) => {
   }
 })
 
-// Sprint 0B: 用 pdf_library.id 取本地 data/pdfs/ 下的 PDF，不再走 NAS
+// Sprint 2-Hotfix Bug1: PDF 文件下载加鉴权 + 权限校验
 app.get('/api/library/:id/file', (req, res) => {
   try {
-    const lib = db.prepare('SELECT sha256, filename FROM pdf_library WHERE id = ?').get(req.params.id);
+    const session = auth.getCurrentSession(db, req.cookies?.auth_token)
+    if (!session) return res.status(401).json({ error: 'not authenticated' })
+    const accountId = session.account_id
+    const isSuperAdmin = session.is_superadmin === 1
+
+    const lib = db.prepare(
+      'SELECT id, sha256, filename, is_private, uploader_account_id FROM pdf_library WHERE id = ?'
+    ).get(req.params.id);
     if (!lib) return res.status(404).json({ error: 'not found' });
+
+    const canAccess = isSuperAdmin
+      || lib.is_private === 0
+      || lib.uploader_account_id === accountId
+    if (!canAccess) {
+      return res.status(403).json({ error: 'forbidden: PDF is private and not yours' })
+    }
+
     const filePath = path.join(__dirname, '../../data/pdfs', lib.sha256.slice(0, 2), lib.sha256 + '.pdf');
     if (!fs.existsSync(filePath)) {
       return res.status(404).json({ error: 'file missing on disk', sha256: lib.sha256 });
@@ -369,12 +404,15 @@ app.post('/api/sessions/start', (req, res) => {
   try {
     const { child_id } = req.body;
     if (!child_id) return res.status(400).json({ error: 'child_id required' });
+    // Sprint 2-Hotfix Bug2: 通过 child 反查 account_id 写入 session
+    const child = db.prepare('SELECT account_id FROM children WHERE id = ?').get(child_id);
+    if (!child) return res.status(404).json({ error: 'child not found' });
     const today = todayLocal();
     const now = new Date().toISOString();
     const pdfsRequired = getTodayPool(child_id).length;
     const result = db.prepare(
-      "INSERT INTO reading_sessions (child_id, date, start_time, pdfs_required, status) VALUES (?, ?, ?, ?, 'started')"
-    ).run(child_id, today, now, pdfsRequired);
+      "INSERT INTO reading_sessions (child_id, account_id, date, start_time, pdfs_required, status) VALUES (?, ?, ?, ?, ?, 'started')"
+    ).run(child_id, child.account_id, today, now, pdfsRequired);
     res.json({ session_id: result.lastInsertRowid });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -842,6 +880,9 @@ app.post('/api/recitation/start', (req, res) => {
   try {
     const { child_id } = req.body
     if (!child_id) return res.status(400).json({ error: 'child_id required' })
+    // Sprint 2-Hotfix Bug2: 通过 child 反查 account_id 写入 session
+    const child = db.prepare('SELECT account_id FROM children WHERE id = ?').get(child_id)
+    if (!child) return res.status(404).json({ error: 'child not found' })
     const today = todayLocal()
     const plan = db.prepare(
       "SELECT * FROM recitation_plans WHERE child_id = ? AND scheduled_date = ? AND status IN ('scheduled', 'retry') ORDER BY id ASC LIMIT 1"
@@ -849,8 +890,8 @@ app.post('/api/recitation/start', (req, res) => {
     if (!plan) return res.status(404).json({ error: 'no recitation plan for today' })
     const now = new Date().toISOString()
     const result = db.prepare(
-      "INSERT INTO reading_sessions (child_id, date, start_time, session_type, plan_id, status) VALUES (?, ?, ?, 'recitation', ?, 'started')"
-    ).run(child_id, today, now, plan.id)
+      "INSERT INTO reading_sessions (child_id, account_id, date, start_time, session_type, plan_id, status) VALUES (?, ?, ?, ?, 'recitation', ?, 'started')"
+    ).run(child_id, child.account_id, today, now, plan.id)
     res.json({ session_id: result.lastInsertRowid, plan })
   } catch (err) {
     res.status(500).json({ error: err.message })
