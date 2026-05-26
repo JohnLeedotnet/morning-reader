@@ -2,6 +2,12 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { adminFetch, adminRecordingUrl } from '../lib/adminFetch'
 import PdfReviewer from '../components/PdfReviewer'
+import { Document, Page, pdfjs } from 'react-pdf'
+import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
+import 'react-pdf/dist/Page/AnnotationLayer.css'
+import 'react-pdf/dist/Page/TextLayer.css'
+
+pdfjs.GlobalWorkerOptions.workerSrc = workerUrl
 
 type View = 'loading' | 'setup' | 'login' | 'dashboard'
 
@@ -35,13 +41,13 @@ interface RecPlan {
 
 interface LibraryItem {
   id: number
-  sha256: string
   filename: string
-  title?: string
+  category_path: string | null
+  sha256?: string
+  title?: string | null
   size_bytes?: number
-  is_private: number
-  is_builtin: number
-  category_path?: string | null
+  is_private?: number
+  is_builtin?: number
 }
 
 interface Category { path: string; count: number }
@@ -204,6 +210,90 @@ function SessionCard({ session, expandedAudio, onToggleAudio, onReview, onDelete
   )
 }
 
+// ── PDF 预览 Modal（含"选用此 PDF"按钮）─────────────────────────────────────────
+
+function PdfModal({ item, onClose, onPick }: {
+  item: LibraryItem
+  onClose: () => void
+  onPick: () => void
+}) {
+  const [numPages, setNumPages] = useState(0)
+  const [page, setPage] = useState(1)
+  const pageWidth = Math.min(window.innerWidth * 0.9, 800)
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowLeft')  setPage(p => Math.max(1, p - 1))
+      else if (e.key === 'ArrowRight') setPage(p => Math.min(numPages || 1, p + 1))
+      else if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [numPages, onClose])
+
+  return (
+    <div className="fixed inset-0 z-[60] bg-black/80 flex flex-col items-center justify-start overflow-auto py-6 px-2"
+         onClick={onClose}>
+      <div className="bg-white rounded-[20px] overflow-hidden w-full max-w-[860px]"
+           onClick={e => e.stopPropagation()}>
+        {/* 顶部 */}
+        <div className="flex items-center gap-3 px-5 py-3 border-b border-cream-card">
+          <div className="flex-1 min-w-0">
+            <p className="font-extrabold text-brown-text text-sm truncate">{item.filename}</p>
+            <p className="text-xs text-brown-mute mt-0.5">
+              {numPages > 0 ? `第 ${page} / ${numPages} 页` : '加载中...'}
+            </p>
+          </div>
+          <button onClick={onClose}
+            className="w-8 h-8 flex items-center justify-center rounded-full
+              bg-cream hover:bg-cream-card text-brown-text font-bold text-lg shrink-0">
+            ×
+          </button>
+        </div>
+
+        {/* PDF */}
+        <div className="flex flex-col items-center bg-[#3a2010] py-4 px-2 min-h-[300px] justify-center">
+          <Document
+            file={`/api/library/${item.id}/file`}
+            onLoadSuccess={({ numPages: n }) => { setNumPages(n); setPage(1) }}
+            loading={<p className="text-cream py-16 text-sm">加载中...</p>}
+            error={<p className="text-red-300 py-16 text-sm">加载失败，请检查网络或权限</p>}
+          >
+            <Page pageNumber={page} width={pageWidth}
+              loading={<div style={{ width: pageWidth, height: 400, background: '#2a1808' }} />}
+            />
+          </Document>
+        </div>
+
+        {/* 翻页 + 选用 */}
+        <div className="flex items-center justify-between gap-3 px-5 py-3 border-t border-cream-card">
+          <div className="flex items-center gap-3">
+            <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1}
+              className="w-9 h-9 flex items-center justify-center rounded-full bg-cream
+                text-brown-text font-extrabold disabled:opacity-30 hover:bg-cream-card transition-colors">
+              ←
+            </button>
+            <span className="text-sm font-bold text-brown-text min-w-[64px] text-center">
+              {numPages > 0 ? `${page} / ${numPages}` : '—'}
+            </span>
+            <button onClick={() => setPage(p => Math.min(numPages, p + 1))}
+              disabled={page >= numPages || numPages === 0}
+              className="w-9 h-9 flex items-center justify-center rounded-full bg-cream
+                text-brown-text font-extrabold disabled:opacity-30 hover:bg-cream-card transition-colors">
+              →
+            </button>
+          </div>
+          <button onClick={onPick}
+            className="bg-peach text-white font-extrabold px-5 py-2 rounded-[12px]
+              hover:opacity-90 transition-opacity">
+            选用此 PDF
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── AddPdfModal ───────────────────────────────────────────────────────────────
 
 function AddPdfModal({ childName, onAdd, onClose }: {
@@ -216,8 +306,16 @@ function AddPdfModal({ childName, onAdd, onClose }: {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [query, setQuery] = useState('')
+  const [queryInput, setQueryInput] = useState('')
+  const [previewItem, setPreviewItem] = useState<LibraryItem | null>(null)
   const [expandedSeries, setExpandedSeries] = useState<Set<string>>(new Set())
   const [expandedLevels, setExpandedLevels] = useState<Set<string>>(new Set())
+
+  // 输入即时反馈 + 500ms debounce 才触发 API
+  useEffect(() => {
+    const t = setTimeout(() => setQuery(queryInput), 500)
+    return () => clearTimeout(t)
+  }, [queryInput])
 
   useEffect(() => {
     setLoading(true); setError('')
@@ -288,7 +386,7 @@ function AddPdfModal({ childName, onAdd, onClose }: {
 
         <div className="px-6 py-3 shrink-0">
           <input
-            type="text" placeholder="搜索文件名..." value={query} onChange={e => setQuery(e.target.value)}
+            type="text" placeholder="搜索文件名..." value={queryInput} onChange={e => setQueryInput(e.target.value)}
             className="w-full bg-cream rounded-[10px] px-3 py-2 text-sm text-brown-text
               border-2 border-transparent focus:border-peach outline-none transition-colors"
           />
@@ -308,7 +406,7 @@ function AddPdfModal({ childName, onAdd, onClose }: {
 
           {/* 搜索模式：扁平列表，按 category_path 显示来源 */}
           {!loading && !error && isSearching && items.map(item => (
-            <button key={item.id} onClick={() => onAdd(item.id, item.filename)}
+            <button key={item.id} onClick={() => setPreviewItem(item)}
               className="w-full text-left text-sm text-brown-text hover:bg-cream rounded-[8px] px-3 py-2 flex items-center gap-2">
               <span className="shrink-0 text-brown-faint text-[11px] w-12 tabular-nums">#{item.id}</span>
               <span className="truncate flex-1">{item.filename}</span>
@@ -356,7 +454,7 @@ function AddPdfModal({ childName, onAdd, onClose }: {
                         <ul className="ml-6 mt-1 mb-1 space-y-0.5">
                           {(itemsByCategory.get(fullPath) ?? []).map(item => (
                             <li key={item.id}>
-                              <button onClick={() => onAdd(item.id, item.filename)}
+                              <button onClick={() => setPreviewItem(item)}
                                 className="w-full text-left text-sm text-brown-text hover:bg-cream rounded-[6px] px-3 py-1">
                                 {item.filename}
                               </button>
@@ -372,6 +470,16 @@ function AddPdfModal({ childName, onAdd, onClose }: {
           ))}
         </div>
       </div>
+
+      {previewItem && (
+        <PdfModal
+          item={previewItem}
+          onClose={() => setPreviewItem(null)}
+          onPick={() => {
+            onAdd(previewItem.id, previewItem.filename)
+          }}
+        />
+      )}
     </div>
   )
 }

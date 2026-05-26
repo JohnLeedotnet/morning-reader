@@ -336,13 +336,6 @@ export default function HomePage() {
           <div className="flex-1 h-px bg-brown-faint/25"></div>
         </div>
         <div className="flex flex-wrap gap-3 justify-center">
-          <Link to="/library"
-            className="inline-flex items-center gap-3 bg-white text-brown-text font-extrabold
-              px-5 py-3 rounded-[14px] shadow-[0_2px_12px_rgba(224,122,95,0.08)]
-              hover:shadow-[0_4px_24px_rgba(224,122,95,0.18)] hover:bg-cream/30 transition-all">
-            <span className="text-2xl">📖</span>
-            <span>浏览图书馆</span>
-          </Link>
           {FAMILY_TOOLS.map(tool => (
             <a key={tool.url} href={tool.url}
                className="inline-flex items-center gap-3 bg-white text-brown-text font-extrabold
