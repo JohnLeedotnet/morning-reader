@@ -38,7 +38,16 @@ if (!fs.existsSync(RECORDINGS_DIR)) fs.mkdirSync(RECORDINGS_DIR, { recursive: tr
 const AUTO_DISCARD_MIN_DURATION_S = 20
 const AUTO_DISCARD_MAX_SILENCE_RATIO = 0.7
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 200 * 1024 * 1024 } });
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: RECORDINGS_DIR,
+    filename: (_req, file, cb) => {
+      const ext = file.originalname?.endsWith('.mp4') ? 'mp4' : 'webm'
+      cb(null, `upload_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`)
+    },
+  }),
+  limits: { fileSize: 200 * 1024 * 1024 },
+});
 
 function todayLocal() {
   const d = new Date()
@@ -461,10 +470,14 @@ app.post('/api/sessions/:id/pdf-opened', (req, res) => {
 });
 
 app.post('/api/sessions/:id/complete', upload.single('recording'), (req, res) => {
+  req.setTimeout(120000);
   try {
     const sessionId = parseInt(req.params.id);
     const session = db.prepare('SELECT * FROM reading_sessions WHERE id = ?').get(sessionId);
-    if (!session) return res.status(404).json({ error: 'session not found' });
+    if (!session) {
+      if (req.file) fs.unlink(req.file.path, () => {});
+      return res.status(404).json({ error: 'session not found' });
+    }
 
     const metrics = JSON.parse(req.body.metrics ?? '{}');
     const {
@@ -477,7 +490,7 @@ app.post('/api/sessions/:id/complete', upload.single('recording'), (req, res) =>
     if (req.file) {
       const ext = req.file.originalname?.endsWith('.mp4') ? 'mp4' : 'webm';
       const filename = `${session.child_id}_${sessionId}_${Date.now()}.${ext}`;
-      fs.writeFileSync(path.join(RECORDINGS_DIR, filename), req.file.buffer);
+      fs.renameSync(req.file.path, path.join(RECORDINGS_DIR, filename));
       recordingPath = filename;
     }
 
@@ -899,10 +912,14 @@ app.post('/api/recitation/start', (req, res) => {
 })
 
 app.post('/api/recitation/:id/complete', upload.single('recording'), (req, res) => {
+  req.setTimeout(120000)
   try {
     const sessionId = parseInt(req.params.id)
     const session = db.prepare('SELECT * FROM reading_sessions WHERE id = ?').get(sessionId)
-    if (!session) return res.status(404).json({ error: 'session not found' })
+    if (!session) {
+      if (req.file) fs.unlink(req.file.path, () => {})
+      return res.status(404).json({ error: 'session not found' })
+    }
 
     const metrics = JSON.parse(req.body.metrics ?? '{}')
     const {
@@ -914,7 +931,7 @@ app.post('/api/recitation/:id/complete', upload.single('recording'), (req, res) 
     if (req.file) {
       const ext = req.file.originalname?.endsWith('.mp4') ? 'mp4' : 'webm'
       const filename = `${session.child_id}_${sessionId}_${Date.now()}.${ext}`
-      fs.writeFileSync(path.join(RECORDINGS_DIR, filename), req.file.buffer)
+      fs.renameSync(req.file.path, path.join(RECORDINGS_DIR, filename))
       recordingPath = filename
     }
 

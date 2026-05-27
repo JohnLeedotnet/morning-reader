@@ -33,8 +33,11 @@ const STATUS_INFO: Record<string, { label: string; bg: string; text: string }> =
 
 function fmtHMS(iso: string | null): string {
   if (!iso) return '—'
-  const d = new Date(iso)
-  return `${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}:${d.getSeconds().toString().padStart(2,'0')}`
+  try {
+    const d = new Date(iso)
+    if (isNaN(d.getTime())) return '—'
+    return `${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}:${d.getSeconds().toString().padStart(2,'0')}`
+  } catch { return '—' }
 }
 
 function fmtDuration(s: number): string {

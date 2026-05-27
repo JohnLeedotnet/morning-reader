@@ -76,6 +76,15 @@ export default function MicTest() {
         </div>
       )}
 
+      {status === 'error' && (
+        <textarea
+          readOnly
+          value={message}
+          onClick={e => (e.target as HTMLTextAreaElement).select()}
+          className="w-full max-w-sm text-xs text-red-800 bg-red-50 border border-red-300 rounded-xl p-3 resize-none h-20 mt-2"
+        />
+      )}
+
       <div className="text-xs text-gray-400 text-center mt-4 space-y-1">
         <p>地址：{window.location.href}</p>
         <p>HTTPS：{location.protocol === 'https:' ? '✓' : '✗（getUserMedia 要求 HTTPS）'}</p>

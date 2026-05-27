@@ -100,6 +100,7 @@ export default function ReadingPage() {
   const [page,         setPage]         = useState(1)
   const [numPages,     setNumPages]     = useState(0)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(0)
   const [error,        setError]        = useState('')
   const [aspectRatio,  setAspectRatio]  = useState(0.707)  // PDF page w/h, default A4 portrait
 
@@ -304,14 +305,26 @@ export default function ReadingPage() {
   const handleSubmit = async () => {
     if (!sessionId || isSubmitting) return
     setIsSubmitting(true)
+    setUploadProgress(0)
     try {
       const { blob, metrics } = await recorder.stopAndGetResult()
       const ext = blob.type.includes('mp4') ? 'mp4' : 'webm'
       const fd = new FormData()
       fd.append('recording', blob, `rec.${ext}`)
       fd.append('metrics', JSON.stringify(metrics))
-      const res = await fetch(`/api/sessions/${sessionId}/complete`, { method: 'POST', body: fd })
-      const data = await res.json()
+      const data = await new Promise<Record<string, unknown>>((resolve, reject) => {
+        const xhr = new XMLHttpRequest()
+        xhr.open('POST', `/api/sessions/${sessionId}/complete`)
+        xhr.upload.onprogress = e => { if (e.lengthComputable) setUploadProgress(Math.round(e.loaded / e.total * 100)) }
+        xhr.onload = () => {
+          try { resolve(JSON.parse(xhr.responseText)) }
+          catch { reject(new Error('服务器返回格式错误')) }
+        }
+        xhr.onerror = () => reject(new Error('网络错误，请重试'))
+        xhr.ontimeout = () => reject(new Error('上传超时，请重试'))
+        xhr.timeout = 120000
+        xhr.send(fd)
+      })
       if (data.discarded) {
         navigate('/discarded', {
           state: {
@@ -328,6 +341,7 @@ export default function ReadingPage() {
       navigate(`/result/${data.id}`, { replace: true })
     } catch (e) {
       setError((e as Error).message)
+      setUploadProgress(0)
       setIsSubmitting(false)
     }
   }
@@ -528,6 +542,11 @@ export default function ReadingPage() {
           </div>
         </div>
 
+      {isSubmitting && uploadProgress > 0 && uploadProgress < 100 && (
+        <div className="absolute inset-x-0 bottom-0 flex items-center justify-center py-2 bg-black/60 text-white text-sm font-semibold">
+          上传中 {uploadProgress}%
+        </div>
+      )}
       </div>
     </div>
   )
