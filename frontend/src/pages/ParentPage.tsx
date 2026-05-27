@@ -808,7 +808,7 @@ export default function ParentPage() {
   // Recitation state
   const [recPlans,      setRecPlans]      = useState<RecPlan[]>([])
   const [loadingRec,    setLoadingRec]    = useState(false)
-  const [recChildId,    setRecChildId]    = useState('mike')
+  const [recChildId,    setRecChildId]    = useState('')
   const [recPdf,        setRecPdf]        = useState<string | null>(null)
   const [recDate,       setRecDate]       = useState('')
   const [schedulingRec, setSchedulingRec] = useState(false)
@@ -845,6 +845,15 @@ export default function ParentPage() {
       .then((data: any[]) => setAllChildren(data.map(c => ({ id: c.id, name: c.name, age: c.age, daily_count: c.daily_count, min_duration_s: c.min_duration_s, cursor_library_id: c.cursor_library_id ?? null, cursor_filename: c.cursor_filename ?? null }))))
       .catch(() => {})
   }, [view])
+
+  // 加载 allChildren 后，若 recChildId 未设置则默认选第一个孩子
+  useEffect(() => {
+    if (!recChildId && allChildren.length > 0) {
+      setRecChildId(allChildren[0].id)
+    }
+    // 故意只依赖 allChildren，避免外部 setRecChildId('') 时立即覆盖
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allChildren])
 
   // Load pool configs when on pool tab
   useEffect(() => {

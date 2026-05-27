@@ -78,10 +78,26 @@ export function useReadingRecorder({ maxConsecutiveSilenceS = 15 } = {}) {
   }, [])
 
   const start = useCallback(async () => {
+    // Sprint 2-Hotfix-3: 详细诊断麦克风加载失败（兼容特斯拉车机等旧 Chromium）
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      throw new Error(
+        `mediaDevices API 不可用 | HTTPS=${location.protocol === 'https:'} | UA=${navigator.userAgent.slice(0, 80)}`
+      )
+    }
     const constraints: MediaStreamConstraints = {
       audio: selectedDeviceId ? { deviceId: { exact: selectedDeviceId } } : true,
     }
-    const stream = await navigator.mediaDevices.getUserMedia(constraints)
+    let stream: MediaStream
+    try {
+      stream = await navigator.mediaDevices.getUserMedia(constraints)
+    } catch (err: unknown) {
+      const e = err as { name?: string; message?: string }
+      const name = e?.name ?? 'UnknownError'
+      const msg = e?.message ?? '(无消息)'
+      throw new Error(
+        `[${name}] ${msg} | HTTPS=${location.protocol === 'https:'} | UA=${navigator.userAgent.slice(0, 80)}`
+      )
+    }
     streamRef.current = stream
 
     const ctx = new AudioContext()

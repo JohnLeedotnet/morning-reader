@@ -18,7 +18,10 @@ export default function MicTest() {
       setMessage('✅ 麦克风正常 — 授权成功')
     } catch (err) {
       setStatus('error')
-      setMessage(`❌ 错误：${(err as Error).message}`)
+      const e = err as { name?: string; message?: string }
+      const name = e?.name ?? 'UnknownError'
+      const msg = e?.message ?? '(无消息)'
+      setMessage(`❌ [${name}] ${msg}`)
     }
   }
 
@@ -73,9 +76,12 @@ export default function MicTest() {
         </div>
       )}
 
-      <div className="text-xs text-gray-400 text-center mt-4">
-        <p>当前地址：{window.location.href}</p>
-        <p>User Agent：{navigator.userAgent.slice(0, 80)}</p>
+      <div className="text-xs text-gray-400 text-center mt-4 space-y-1">
+        <p>地址：{window.location.href}</p>
+        <p>HTTPS：{location.protocol === 'https:' ? '✓' : '✗（getUserMedia 要求 HTTPS）'}</p>
+        <p>mediaDevices：{typeof navigator.mediaDevices !== 'undefined' ? '✓' : '✗（API 不存在）'}</p>
+        <p>getUserMedia：{typeof navigator.mediaDevices?.getUserMedia === 'function' ? '✓' : '✗'}</p>
+        <p className="break-all">UA：{navigator.userAgent}</p>
       </div>
     </div>
   )
