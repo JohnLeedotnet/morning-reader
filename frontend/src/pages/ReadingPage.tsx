@@ -102,6 +102,8 @@ export default function ReadingPage() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
   const [error,        setError]        = useState('')
+  const [pageAnnotations, setPageAnnotations] = useState<Array<{ id: number; message: string }>>([])
+
   const [aspectRatio,  setAspectRatio]  = useState(0.707)  // PDF page w/h, default A4 portrait
 
   // PDF zoom + layout preferences (persisted per child)
@@ -274,6 +276,16 @@ export default function ReadingPage() {
     return () => window.removeEventListener('keydown', h)
   }, [goNext, goPrev])
 
+  // Fetch annotations for current page (Sprint 3A)
+  useEffect(() => {
+    const libId = pool[pdfIdx]?.library_id
+    if (!libId) { setPageAnnotations([]); return }
+    fetch(`/api/annotations?library_id=${libId}&page=${page}`)
+      .then(r => r.ok ? r.json() : [])
+      .then(setPageAnnotations)
+      .catch(() => setPageAnnotations([]))
+  }, [pool, pdfIdx, page])
+
   // Touch swipe
   const touchX = useRef(0)
   const handleTouchStart = (e: React.TouchEvent) => { touchX.current = e.touches[0].clientX }
@@ -442,6 +454,18 @@ export default function ReadingPage() {
             护眼
           </button>
         </div>
+
+        {/* ── 家长批注气泡（Sprint 3A）── */}
+        {pageAnnotations.length > 0 && (
+          <div className="bg-peach/10 border-2 border-peach rounded-[12px] mx-3 mt-1.5 p-3 shrink-0">
+            {pageAnnotations.map(a => (
+              <p key={a.id} className="text-brown-text font-bold text-sm flex items-start gap-2">
+                <span className="shrink-0">👨‍👩‍👧 家长提示：</span>
+                <span>{a.message}</span>
+              </p>
+            ))}
+          </div>
+        )}
 
         {/* ── PDF area ── */}
         <div

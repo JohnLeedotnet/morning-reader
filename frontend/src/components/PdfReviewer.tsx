@@ -50,6 +50,9 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
   const [numPages,    setNumPages]   = useState(0)
   const [autoFollow,  setAutoFollow] = useState(true)
   const [manualOverride, setManualOverride] = useState(false)
+  const [annotations,   setAnnotations]  = useState<Array<{ id: number; message: string }>>([])
+  const [annotInput,    setAnnotInput]   = useState('')
+  const [savingAnnot,   setSavingAnnot]  = useState(false)
 
   // Window size for stable, content-independent page width calculation
   const [winW, setWinW] = useState(window.innerWidth)
@@ -198,6 +201,44 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
     return () => window.removeEventListener('keydown', h)
   }, [currentPage, numPages, showDual])
 
+  // Load annotations for current page (Sprint 3A)
+  useEffect(() => {
+    const libId = activePdf
+      ? (pdfReads.find(r => r.pdf_filename === activePdf)?.pdf_library_id ?? null)
+      : null
+    if (!libId) { setAnnotations([]); return }
+    adminFetch(`/api/admin/annotations?library_id=${libId}&page=${currentPage}`)
+      .then(r => r.ok ? r.json() : [])
+      .then(setAnnotations)
+      .catch(() => setAnnotations([]))
+  }, [activePdf, pdfReads, currentPage])
+
+  const saveAnnotation = async () => {
+    const libId = activePdf
+      ? (pdfReads.find(r => r.pdf_filename === activePdf)?.pdf_library_id ?? null)
+      : null
+    if (!annotInput.trim() || !libId) return
+    setSavingAnnot(true)
+    try {
+      const res = await adminFetch('/api/admin/annotations', {
+        method: 'POST',
+        body: JSON.stringify({
+          pdf_library_id: libId,
+          page_number: currentPage,
+          message: annotInput.trim(),
+          session_id: sessionId,
+        }),
+      })
+      if (res.ok) {
+        const created = await res.json()
+        setAnnotations(prev => [...prev, { id: created.id, message: created.message }])
+        setAnnotInput('')
+      }
+    } finally {
+      setSavingAnnot(false)
+    }
+  }
+
   // Touch swipe navigation
   const touchStartX = useRef(0)
   const onTouchStart = (e: React.TouchEvent) => {
@@ -326,6 +367,38 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
           下一页 →
         </button>
       </div>
+
+      {/* Sprint 3A: 家长批注 */}
+      {activeLibId && (
+        <div className="bg-cream rounded-[12px] p-3 mt-1">
+          <p className="text-xs font-extrabold text-brown-text mb-2">
+            📝 给孩子的提示（第 {currentPage} 页）
+          </p>
+          {annotations.length > 0 && (
+            <ul className="space-y-1 mb-2">
+              {annotations.map(a => (
+                <li key={a.id} className="text-sm text-brown-text bg-white rounded-[8px] px-3 py-1.5">
+                  {a.message}
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="flex gap-2">
+            <input
+              type="text" value={annotInput} onChange={e => setAnnotInput(e.target.value)}
+              placeholder="如：apple 读错了，正确读音…"
+              className="flex-1 bg-white rounded-[8px] px-3 py-2 text-sm text-brown-text
+                border-2 border-transparent focus:border-peach outline-none"
+              onKeyDown={e => { if (e.key === 'Enter') saveAnnotation() }}
+            />
+            <button onClick={saveAnnotation} disabled={savingAnnot || !annotInput.trim()}
+              className="bg-peach text-white text-sm font-extrabold px-4 py-2 rounded-[8px]
+                hover:opacity-90 disabled:opacity-40 transition-opacity shrink-0">
+              {savingAnnot ? '保存中' : '保存'}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

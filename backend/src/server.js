@@ -1148,6 +1148,59 @@ app.get('/api/admin/pool/preview/:childId', requireParent, (req, res) => {
   }
 })
 
+// ── PDF 批注（Sprint 3A）─────────────────────────────────────────────────────
+
+// 家长保存批注（PIN 解锁）
+app.post('/api/admin/annotations', requireParent, (req, res) => {
+  try {
+    const { pdf_library_id, page_number, message, session_id } = req.body
+    if (!pdf_library_id || !page_number || !message?.trim()) {
+      return res.status(400).json({ error: 'pdf_library_id, page_number, message required' })
+    }
+    const result = db.prepare(`
+      INSERT INTO pdf_annotations (account_id, pdf_library_id, page_number, message, created_by_session)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(req.accountId, pdf_library_id, page_number, message.trim(), session_id ?? null)
+    res.json(db.prepare('SELECT * FROM pdf_annotations WHERE id = ?').get(result.lastInsertRowid))
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// 家长查看某页批注（审核时回显，PIN 解锁）
+app.get('/api/admin/annotations', requireParent, (req, res) => {
+  try {
+    const { library_id, page } = req.query
+    if (!library_id || !page) return res.status(400).json({ error: 'library_id, page required' })
+    const rows = db.prepare(`
+      SELECT * FROM pdf_annotations
+      WHERE account_id = ? AND pdf_library_id = ? AND page_number = ?
+      ORDER BY created_at ASC
+    `).all(req.accountId, library_id, page)
+    res.json(rows)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// 孩子端读取某页批注（仅需 account 登录，不需 PIN）
+app.get('/api/annotations', (req, res) => {
+  try {
+    const session = auth.getCurrentSession(db, req.cookies?.auth_token)
+    if (!session) return res.status(401).json({ error: 'not authenticated' })
+    const { library_id, page } = req.query
+    if (!library_id || !page) return res.status(400).json({ error: 'library_id, page required' })
+    const rows = db.prepare(`
+      SELECT id, page_number, message, drawing_svg FROM pdf_annotations
+      WHERE account_id = ? AND pdf_library_id = ? AND page_number = ?
+      ORDER BY created_at ASC
+    `).all(session.account_id, library_id, page)
+    res.json(rows)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // ── Sprint 0C-Hotfix: serve frontend production build ───────────
 const FRONTEND_DIST = path.resolve(__dirname, '../../frontend/dist')
 if (fs.existsSync(FRONTEND_DIST)) {

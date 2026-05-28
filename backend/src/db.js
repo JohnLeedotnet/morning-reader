@@ -86,6 +86,21 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_pdf_page_events_session ON pdf_page_events(session_id);
 `);
+db.exec(`
+  CREATE TABLE IF NOT EXISTS pdf_annotations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL,
+    pdf_library_id INTEGER NOT NULL,
+    page_number INTEGER NOT NULL,
+    message TEXT NOT NULL,
+    drawing_svg TEXT DEFAULT NULL,
+    created_by_session INTEGER DEFAULT NULL,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_annotations_lib_page
+    ON pdf_annotations(account_id, pdf_library_id, page_number);
+`);
+
 db.prepare("UPDATE children SET font_scale = 1.0  WHERE id = 'mike'").run();
 db.prepare("UPDATE children SET font_scale = 1.25 WHERE id = 'peyton'").run();
 
