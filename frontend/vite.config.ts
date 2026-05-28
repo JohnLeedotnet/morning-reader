@@ -50,6 +50,16 @@ export default defineConfig({
       },
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('react-pdf') || id.includes('pdfjs-dist')) return 'pdf'
+          if (id.includes('node_modules/react/') || id.includes('node_modules/react-dom/') || id.includes('node_modules/react-router')) return 'react-vendor'
+        },
+      },
+    },
+  },
   optimizeDeps: {
     include: ['pdfjs-dist'],
   },
