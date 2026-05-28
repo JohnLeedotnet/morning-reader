@@ -1188,18 +1188,21 @@ app.get('/api/admin/annotations', requireParent, (req, res) => {
   }
 })
 
-// 孩子端读取某页批注（仅需 account 登录，不需 PIN）
+// 孩子端读取批注（仅需 account 登录，不需 PIN）
+// page 可选：不传则返回整本所有批注（含 page_number），前端翻页不 refetch
 app.get('/api/annotations', (req, res) => {
   try {
     const session = auth.getCurrentSession(db, req.cookies?.auth_token)
     if (!session) return res.status(401).json({ error: 'not authenticated' })
     const { library_id, page } = req.query
-    if (!library_id || !page) return res.status(400).json({ error: 'library_id, page required' })
-    const rows = db.prepare(`
-      SELECT id, page_number, message, drawing_svg, pos_x, pos_y, color FROM pdf_annotations
-      WHERE account_id = ? AND pdf_library_id = ? AND page_number = ?
-      ORDER BY created_at ASC
-    `).all(session.account_id, library_id, page)
+    if (!library_id) return res.status(400).json({ error: 'library_id required' })
+    const rows = page
+      ? db.prepare(`SELECT id, page_number, message, drawing_svg, pos_x, pos_y, color FROM pdf_annotations
+           WHERE account_id = ? AND pdf_library_id = ? AND page_number = ? ORDER BY created_at ASC`
+        ).all(session.account_id, library_id, page)
+      : db.prepare(`SELECT id, page_number, message, drawing_svg, pos_x, pos_y, color FROM pdf_annotations
+           WHERE account_id = ? AND pdf_library_id = ? ORDER BY page_number, created_at ASC`
+        ).all(session.account_id, library_id)
     res.json(rows)
   } catch (err) {
     res.status(500).json({ error: err.message })

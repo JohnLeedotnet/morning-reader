@@ -358,18 +358,21 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
             <div className="flex gap-1.5">
               <button
                 onClick={() => { setActiveTool(t => t === 'text' ? null : 'text'); setDeleteMode(false) }}
-                className={`w-9 h-9 rounded-lg font-extrabold ${activeTool === 'text' ? 'bg-peach text-white' : 'bg-cream text-brown-text'}`}>
-                T
+                className={`px-3 h-8 rounded-lg text-xs font-extrabold transition-colors
+                  ${activeTool === 'text' ? 'bg-peach text-white' : 'bg-cream text-brown-text hover:bg-cream-card'}`}>
+                文字
               </button>
               <button
                 onClick={() => { setActiveTool(t => t === 'draw' ? null : 'draw'); setDeleteMode(false) }}
-                className={`w-9 h-9 rounded-lg font-extrabold ${activeTool === 'draw' ? 'bg-peach text-white' : 'bg-cream text-brown-text'}`}>
-                ✂
+                className={`px-3 h-8 rounded-lg text-xs font-extrabold transition-colors
+                  ${activeTool === 'draw' ? 'bg-peach text-white' : 'bg-cream text-brown-text hover:bg-cream-card'}`}>
+                手绘
               </button>
               <button
                 onClick={() => { setDeleteMode(d => !d); setActiveTool(null) }}
-                className={`w-9 h-9 rounded-lg ${deleteMode ? 'bg-red-500 text-white' : 'bg-cream text-brown-text'}`}>
-                🗑
+                className={`px-3 h-8 rounded-lg text-xs font-extrabold transition-colors
+                  ${deleteMode ? 'bg-red-500 text-white' : 'bg-cream text-brown-text hover:bg-cream-card'}`}>
+                删除
               </button>
             </div>
             <div className="flex gap-1.5">

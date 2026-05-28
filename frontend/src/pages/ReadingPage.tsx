@@ -102,7 +102,7 @@ export default function ReadingPage() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
   const [error,        setError]        = useState('')
-  const [pageAnnotations, setPageAnnotations] = useState<Array<{ id: number; message: string; pos_x: number | null; pos_y: number | null; color: string; drawing_svg?: string | null }>>([])
+  const [pageAnnotations, setPageAnnotations] = useState<Array<{ id: number; page_number: number; message: string; pos_x: number | null; pos_y: number | null; color: string; drawing_svg?: string | null }>>([])
 
   const [aspectRatio,  setAspectRatio]  = useState(0.707)  // PDF page w/h, default A4 portrait
 
@@ -276,15 +276,15 @@ export default function ReadingPage() {
     return () => window.removeEventListener('keydown', h)
   }, [goNext, goPrev])
 
-  // Fetch annotations for current page (Sprint 3A)
+  // 拉整本书所有批注（含 page_number），换书 refetch；翻页不 refetch，渲染时按 page_number 过滤
   useEffect(() => {
     const libId = pool[pdfIdx]?.library_id
     if (!libId) { setPageAnnotations([]); return }
-    fetch(`/api/annotations?library_id=${libId}&page=${page}`)
+    fetch(`/api/annotations?library_id=${libId}`)
       .then(r => r.ok ? r.json() : [])
       .then(setPageAnnotations)
       .catch(() => setPageAnnotations([]))
-  }, [pool, pdfIdx, page])
+  }, [pool, pdfIdx])
 
   // Touch swipe
   const touchX = useRef(0)
@@ -455,21 +455,6 @@ export default function ReadingPage() {
           </button>
         </div>
 
-        {/* ── 双页时定位不可用，降级为顶部列表 fallback（Sprint 3A-v2）── */}
-        {showDualPage && pageAnnotations.length > 0 && (
-          <div className="bg-peach/10 border-2 border-peach rounded-[12px] mx-3 mt-1.5 p-3 shrink-0">
-            {pageAnnotations.filter(a => a.message).map(a => (
-              <p key={a.id} className="text-brown-text font-bold text-sm flex items-start gap-2">
-                <span className="shrink-0">👨‍👩‍👧 家长提示：</span>
-                <span>{a.message}</span>
-              </p>
-            ))}
-            {pageAnnotations.some(a => a.drawing_svg) && (
-              <p className="text-brown-mute text-xs px-3">✏️ 本页有手绘批注，切单页查看</p>
-            )}
-          </div>
-        )}
-
         {/* ── PDF area ── */}
         <div
           ref={pdfAreaRef}
@@ -499,52 +484,49 @@ export default function ReadingPage() {
                 loading={<div className="text-brown-mute text-sm mt-20">加载 PDF...</div>}
                 error={<div className="text-red-400 text-sm mt-20">PDF 加载失败</div>}
               >
-                {showDualPage ? (
-                  <div className="flex gap-6 justify-center">
-                    <Page pageNumber={page}   width={finalPageWidth}
-                      renderTextLayer={false} renderAnnotationLayer={false} />
-                    {page + 1 <= numPages && (
-                      <Page pageNumber={page+1} width={finalPageWidth}
+                {(() => {
+                  // 每个 Page 包独立 relative inline-block 容器，单页/双页都精确渲染批注
+                  const renderPage = (n: number) => (
+                    <div key={n} className="relative inline-block">
+                      <Page pageNumber={n} width={finalPageWidth}
                         renderTextLayer={false} renderAnnotationLayer={false} />
-                    )}
-                  </div>
-                ) : (
-                  <Page pageNumber={page} width={finalPageWidth}
-                    renderTextLayer={false} renderAnnotationLayer={false} />
-                )}
+                      {/* 文字定位气泡 */}
+                      {pageAnnotations.filter(a => a.page_number === n && a.pos_x != null && a.pos_y != null && !a.drawing_svg).map(a => (
+                        <div key={a.id} className="absolute z-10 -translate-x-1/2 -translate-y-1/2 pointer-events-none"
+                          style={{ left: `${a.pos_x! * 100}%`, top: `${a.pos_y! * 100}%` }}>
+                          <span className="inline-block text-xs font-bold text-white px-2 py-1 rounded-full shadow-lg whitespace-nowrap"
+                            style={{ background: a.color }}>{a.message}</span>
+                        </div>
+                      ))}
+                      {/* 手绘批注 */}
+                      {pageAnnotations.filter(a => a.page_number === n && a.drawing_svg).map(a => {
+                        let pts: Array<[number, number]> = []
+                        try { pts = JSON.parse(a.drawing_svg!) } catch (_) { return null }
+                        if (pts.length < 2) return null
+                        return (
+                          <svg key={a.id} className="absolute inset-0 w-full h-full pointer-events-none z-10"
+                            viewBox="0 0 1 1" preserveAspectRatio="none">
+                            <polyline points={pts.map(p => `${p[0]},${p[1]}`).join(' ')}
+                              fill="none" stroke={a.color} strokeWidth="2.5"
+                              vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                        )
+                      })}
+                      {/* 护眼条 */}
+                      {eyeStripes && (
+                        <div className="absolute inset-0 pointer-events-none rounded-[4px]"
+                          style={{ backgroundImage: 'repeating-linear-gradient(to bottom, rgba(168, 198, 134, 0) 0px, rgba(168, 198, 134, 0) 24px, rgba(168, 198, 134, 0.18) 24px, rgba(168, 198, 134, 0.18) 48px)' }} />
+                      )}
+                    </div>
+                  )
+                  return showDualPage ? (
+                    <div className="flex gap-6 justify-center">
+                      {renderPage(page)}
+                      {page + 1 <= numPages && renderPage(page + 1)}
+                    </div>
+                  ) : renderPage(page)
+                })()}
               </Document>
-              {/* 单页定位气泡（pointer-events-none 不挡翻页）*/}
-              {!showDualPage && pageAnnotations.filter(a => a.pos_x != null && a.pos_y != null && !a.drawing_svg).map(a => (
-                <div key={a.id} className="absolute z-10 -translate-x-1/2 -translate-y-1/2 pointer-events-none"
-                  style={{ left: `${a.pos_x! * 100}%`, top: `${a.pos_y! * 100}%` }}>
-                  <span className="inline-block text-xs font-bold text-white px-2 py-1 rounded-full shadow-lg whitespace-nowrap"
-                    style={{ background: a.color }}>
-                    {a.message}
-                  </span>
-                </div>
-              ))}
-              {/* 单页手绘批注（只读）*/}
-              {!showDualPage && pageAnnotations.filter(a => a.drawing_svg).map(a => {
-                let pts: Array<[number, number]> = []
-                try { pts = JSON.parse(a.drawing_svg!) } catch (_) { return null }
-                if (pts.length < 2) return null
-                return (
-                  <svg key={a.id} className="absolute inset-0 w-full h-full pointer-events-none z-10"
-                    viewBox="0 0 1 1" preserveAspectRatio="none">
-                    <polyline points={pts.map(p => `${p[0]},${p[1]}`).join(' ')}
-                      fill="none" stroke={a.color} strokeWidth="2.5"
-                      vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                )
-              })}
-              {eyeStripes && (
-                <div
-                  className="absolute inset-0 pointer-events-none rounded-[4px]"
-                  style={{
-                    backgroundImage: 'repeating-linear-gradient(to bottom, rgba(168, 198, 134, 0) 0px, rgba(168, 198, 134, 0) 24px, rgba(168, 198, 134, 0.18) 24px, rgba(168, 198, 134, 0.18) 48px)'
-                  }}
-                />
-              )}
             </div>
           )}
 
