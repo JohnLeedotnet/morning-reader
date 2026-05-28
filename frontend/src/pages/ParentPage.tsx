@@ -1218,35 +1218,36 @@ export default function ParentPage() {
             </div>
 
             {/* Selection bar */}
-            {filtered.length > 0 && (
-              <div className="flex items-center justify-between mb-3 px-1">
-                {!selectMode ? (
-                  <button onClick={() => setSelectMode(true)}
-                    className="text-sm font-bold text-brown-mute hover:text-peach transition-colors">
-                    ☑️ 选择
+            {filtered.length > 0 && !selectMode && (
+              <div className="flex justify-end mb-3 px-1">
+                <button onClick={() => setSelectMode(true)}
+                  className="flex items-center gap-1.5 text-sm font-bold text-brown-mute hover:text-peach
+                    border-2 border-[#F0D8C8] hover:border-peach rounded-[10px] px-3 py-1.5 transition-colors">
+                  ☐ 选择
+                </button>
+              </div>
+            )}
+            {filtered.length > 0 && selectMode && (
+              <div className="sticky top-0 z-10 bg-peach text-white rounded-[12px] px-4 py-2.5 mb-3
+                flex items-center justify-between shadow-md">
+                <div className="flex items-center gap-4">
+                  <span className="font-extrabold text-sm">✓ 已选 {selectedIds.size}/{filtered.length}</span>
+                  <button onClick={toggleAll} className="text-sm font-bold hover:underline underline-offset-2">
+                    {allSelected ? '取消全选' : '全选'}
                   </button>
-                ) : (
-                  <button onClick={toggleAll}
-                    className="text-sm font-bold text-brown-mute hover:text-peach transition-colors">
-                    {allSelected ? '☰ 取消全选' : '☰ 全选当前列表'}
-                    {selectedIds.size > 0 && (
-                      <span className="ml-2 text-peach">· 已选 {selectedIds.size} / {filtered.length}</span>
-                    )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button onClick={handleBulkDelete} disabled={selectedIds.size === 0}
+                    className="bg-white/20 hover:bg-white/30 disabled:opacity-40 disabled:cursor-not-allowed
+                      text-white text-sm font-extrabold px-3 py-1.5 rounded-[8px] transition-colors">
+                    🗑 删除（{selectedIds.size}）
                   </button>
-                )}
-                {selectMode && (
-                  <div className="flex items-center gap-2">
-                    <button onClick={handleBulkDelete} disabled={selectedIds.size === 0}
-                      className="bg-red-500 hover:bg-red-600 disabled:opacity-30 disabled:cursor-not-allowed
-                        text-white text-sm font-extrabold px-4 py-2 rounded-[10px] transition-colors">
-                      🗑 批量删除（{selectedIds.size}）
-                    </button>
-                    <button onClick={() => { setSelectMode(false); setSelectedIds(new Set()) }}
-                      className="bg-cream hover:bg-cream-card text-brown-text text-sm font-extrabold px-4 py-2 rounded-[10px] transition-colors">
-                      取消
-                    </button>
-                  </div>
-                )}
+                  <button onClick={() => { setSelectMode(false); setSelectedIds(new Set()) }}
+                    className="w-8 h-8 flex items-center justify-center rounded-full
+                      bg-white/20 hover:bg-white/30 text-white font-bold transition-colors">
+                    ✕
+                  </button>
+                </div>
               </div>
             )}
 
