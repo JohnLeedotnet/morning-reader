@@ -102,7 +102,7 @@ function PinInput({ value, onChange, placeholder = '请输入 PIN' }: {
 
 // ── Session card ──────────────────────────────────────────────────────────────
 
-function SessionCard({ session, expandedAudio, onToggleAudio, onReview, onDelete, checked, onToggleCheck }: {
+function SessionCard({ session, expandedAudio, onToggleAudio, onReview, onDelete, checked, onToggleCheck, selectMode }: {
   session: Session
   expandedAudio: number | null
   onToggleAudio: (id: number) => void
@@ -110,6 +110,7 @@ function SessionCard({ session, expandedAudio, onToggleAudio, onReview, onDelete
   onDelete: (id: number) => void
   checked: boolean
   onToggleCheck: (id: number) => void
+  selectMode: boolean
 }) {
   const info = STATUS_INFO[session.status]
   const showAudio = expandedAudio === session.id
@@ -120,11 +121,12 @@ function SessionCard({ session, expandedAudio, onToggleAudio, onReview, onDelete
 
   return (
     <div
-      onClick={() => onToggleCheck(session.id)}
-      className={`rounded-[20px] p-5 cursor-pointer transition-all
+      onClick={() => { if (selectMode) onToggleCheck(session.id) }}
+      className={`rounded-[20px] p-5 transition-all
+        ${selectMode ? 'cursor-pointer' : 'cursor-default'}
         ${checked
           ? 'bg-peach/10 border-2 border-peach shadow-[0_4px_24px_rgba(224,122,95,0.25)]'
-          : 'bg-white border-2 border-transparent shadow-[0_4px_24px_rgba(224,122,95,0.08)] hover:border-[#F0D8C8]'}
+          : 'bg-white border-2 border-transparent shadow-[0_4px_24px_rgba(224,122,95,0.08)]' + (selectMode ? ' hover:border-[#F0D8C8]' : '')}
         ${isRecitation ? 'border-l-4 border-l-peach-deep' : ''}`}
     >
 
@@ -791,6 +793,7 @@ export default function ParentPage() {
   const [filterType,   setFilterType]   = useState<'all' | 'reading' | 'recitation'>('all')
   const [filterStatus, setFilterStatus] = useState<'all' | 'pending_review' | 'passed' | 'redo_required' | 'time_short' | 'long_pause'>('all')
   const [selectedIds,  setSelectedIds]  = useState<Set<number>>(new Set())
+  const [selectMode,   setSelectMode]   = useState(false)
 
   // Pool state
   const [allChildren,        setAllChildren]        = useState<{id: string; name: string; age?: number; daily_count?: number; min_duration_s?: number | null; cursor_library_id?: number | null; cursor_filename?: string | null}[]>([])
@@ -868,7 +871,7 @@ export default function ParentPage() {
   }, [view, tab])
 
   // Clear selection when filters change
-  useEffect(() => { setSelectedIds(new Set()) }, [filterChild, filterType, filterStatus])
+  useEffect(() => { setSelectedIds(new Set()); setSelectMode(false) }, [filterChild, filterType, filterStatus])
 
   // Lock countdown
   useEffect(() => {
@@ -1217,18 +1220,33 @@ export default function ParentPage() {
             {/* Selection bar */}
             {filtered.length > 0 && (
               <div className="flex items-center justify-between mb-3 px-1">
-                <button onClick={toggleAll}
-                  className="text-sm font-bold text-brown-mute hover:text-peach transition-colors">
-                  {allSelected ? '☰ 取消全选' : '☰ 全选当前列表'}
-                  {selectedIds.size > 0 && (
-                    <span className="ml-2 text-peach">· 已选 {selectedIds.size} / {filtered.length}</span>
-                  )}
-                </button>
-                <button onClick={handleBulkDelete} disabled={selectedIds.size === 0}
-                  className="bg-red-500 hover:bg-red-600 disabled:opacity-30 disabled:cursor-not-allowed
-                    text-white text-sm font-extrabold px-4 py-2 rounded-[10px] transition-colors">
-                  🗑 批量删除（{selectedIds.size}）
-                </button>
+                {!selectMode ? (
+                  <button onClick={() => setSelectMode(true)}
+                    className="text-sm font-bold text-brown-mute hover:text-peach transition-colors">
+                    ☑️ 选择
+                  </button>
+                ) : (
+                  <button onClick={toggleAll}
+                    className="text-sm font-bold text-brown-mute hover:text-peach transition-colors">
+                    {allSelected ? '☰ 取消全选' : '☰ 全选当前列表'}
+                    {selectedIds.size > 0 && (
+                      <span className="ml-2 text-peach">· 已选 {selectedIds.size} / {filtered.length}</span>
+                    )}
+                  </button>
+                )}
+                {selectMode && (
+                  <div className="flex items-center gap-2">
+                    <button onClick={handleBulkDelete} disabled={selectedIds.size === 0}
+                      className="bg-red-500 hover:bg-red-600 disabled:opacity-30 disabled:cursor-not-allowed
+                        text-white text-sm font-extrabold px-4 py-2 rounded-[10px] transition-colors">
+                      🗑 批量删除（{selectedIds.size}）
+                    </button>
+                    <button onClick={() => { setSelectMode(false); setSelectedIds(new Set()) }}
+                      className="bg-cream hover:bg-cream-card text-brown-text text-sm font-extrabold px-4 py-2 rounded-[10px] transition-colors">
+                      取消
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -1247,7 +1265,8 @@ export default function ParentPage() {
                   onReview={handleReview}
                   onDelete={handleDeleteSession}
                   checked={selectedIds.has(session.id)}
-                  onToggleCheck={toggleOne} />
+                  onToggleCheck={toggleOne}
+                  selectMode={selectMode} />
               ))}
             </div>
           </div>
