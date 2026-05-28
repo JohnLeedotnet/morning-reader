@@ -1153,14 +1153,16 @@ app.get('/api/admin/pool/preview/:childId', requireParent, (req, res) => {
 // 家长保存批注（PIN 解锁）
 app.post('/api/admin/annotations', requireParent, (req, res) => {
   try {
-    const { pdf_library_id, page_number, message, session_id } = req.body
+    const { pdf_library_id, page_number, message, session_id, pos_x, pos_y, color } = req.body
     if (!pdf_library_id || !page_number || !message?.trim()) {
       return res.status(400).json({ error: 'pdf_library_id, page_number, message required' })
     }
     const result = db.prepare(`
-      INSERT INTO pdf_annotations (account_id, pdf_library_id, page_number, message, created_by_session)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(req.accountId, pdf_library_id, page_number, message.trim(), session_id ?? null)
+      INSERT INTO pdf_annotations
+        (account_id, pdf_library_id, page_number, message, created_by_session, pos_x, pos_y, color, kind)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'text')
+    `).run(req.accountId, pdf_library_id, page_number, message.trim(), session_id ?? null,
+           pos_x ?? null, pos_y ?? null, color ?? '#E07A5F')
     res.json(db.prepare('SELECT * FROM pdf_annotations WHERE id = ?').get(result.lastInsertRowid))
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -1191,11 +1193,23 @@ app.get('/api/annotations', (req, res) => {
     const { library_id, page } = req.query
     if (!library_id || !page) return res.status(400).json({ error: 'library_id, page required' })
     const rows = db.prepare(`
-      SELECT id, page_number, message, drawing_svg FROM pdf_annotations
+      SELECT id, page_number, message, drawing_svg, pos_x, pos_y, color FROM pdf_annotations
       WHERE account_id = ? AND pdf_library_id = ? AND page_number = ?
       ORDER BY created_at ASC
     `).all(session.account_id, library_id, page)
     res.json(rows)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// 删除批注（家长，account 隔离）
+app.delete('/api/admin/annotations/:id', requireParent, (req, res) => {
+  try {
+    const result = db.prepare('DELETE FROM pdf_annotations WHERE id = ? AND account_id = ?')
+      .run(parseInt(req.params.id), req.accountId)
+    if (result.changes === 0) return res.status(404).json({ error: 'not found' })
+    res.json({ ok: true })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }

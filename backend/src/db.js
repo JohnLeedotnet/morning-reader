@@ -100,6 +100,10 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_annotations_lib_page
     ON pdf_annotations(account_id, pdf_library_id, page_number);
 `);
+try { db.exec("ALTER TABLE pdf_annotations ADD COLUMN pos_x REAL DEFAULT NULL"); } catch(_) {}
+try { db.exec("ALTER TABLE pdf_annotations ADD COLUMN pos_y REAL DEFAULT NULL"); } catch(_) {}
+try { db.exec("ALTER TABLE pdf_annotations ADD COLUMN color TEXT DEFAULT '#E07A5F'"); } catch(_) {}
+try { db.exec("ALTER TABLE pdf_annotations ADD COLUMN kind TEXT DEFAULT 'text'"); } catch(_) {}
 
 db.prepare("UPDATE children SET font_scale = 1.0  WHERE id = 'mike'").run();
 db.prepare("UPDATE children SET font_scale = 1.25 WHERE id = 'peyton'").run();

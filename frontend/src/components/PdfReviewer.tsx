@@ -50,9 +50,13 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
   const [numPages,    setNumPages]   = useState(0)
   const [autoFollow,  setAutoFollow] = useState(true)
   const [manualOverride, setManualOverride] = useState(false)
-  const [annotations,   setAnnotations]  = useState<Array<{ id: number; message: string }>>([])
-  const [annotInput,    setAnnotInput]   = useState('')
-  const [savingAnnot,   setSavingAnnot]  = useState(false)
+  const [annotations,   setAnnotations]  = useState<Array<{ id: number; message: string; pos_x: number | null; pos_y: number | null; color: string }>>([])
+  const [annotMode,     setAnnotMode]    = useState(false)
+  const [activeTool,    setActiveTool]   = useState<'text' | null>(null)
+  const [annotColor,    setAnnotColor]   = useState('#E07A5F')
+  const [deleteMode,    setDeleteMode]   = useState(false)
+  const [pendingPos,    setPendingPos]   = useState<{ x: number; y: number } | null>(null)
+  const [pendingText,   setPendingText]  = useState('')
 
   // Window size for stable, content-independent page width calculation
   const [winW, setWinW] = useState(window.innerWidth)
@@ -217,26 +221,24 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
     const libId = activePdf
       ? (pdfReads.find(r => r.pdf_filename === activePdf)?.pdf_library_id ?? null)
       : null
-    if (!annotInput.trim() || !libId) return
-    setSavingAnnot(true)
-    try {
-      const res = await adminFetch('/api/admin/annotations', {
-        method: 'POST',
-        body: JSON.stringify({
-          pdf_library_id: libId,
-          page_number: currentPage,
-          message: annotInput.trim(),
-          session_id: sessionId,
-        }),
-      })
-      if (res.ok) {
-        const created = await res.json()
-        setAnnotations(prev => [...prev, { id: created.id, message: created.message }])
-        setAnnotInput('')
-      }
-    } finally {
-      setSavingAnnot(false)
+    if (!pendingText.trim() || !libId || !pendingPos) return
+    const res = await adminFetch('/api/admin/annotations', {
+      method: 'POST',
+      body: JSON.stringify({
+        pdf_library_id: libId, page_number: currentPage, message: pendingText.trim(),
+        session_id: sessionId, pos_x: pendingPos.x, pos_y: pendingPos.y, color: annotColor,
+      }),
+    })
+    if (res.ok) {
+      const c = await res.json()
+      setAnnotations(prev => [...prev, { id: c.id, message: c.message, pos_x: c.pos_x, pos_y: c.pos_y, color: c.color }])
+      setPendingPos(null); setPendingText('')
     }
+  }
+
+  const deleteAnnotation = async (id: number) => {
+    const res = await adminFetch(`/api/admin/annotations/${id}`, { method: 'DELETE' })
+    if (res.ok) setAnnotations(prev => prev.filter(a => a.id !== id))
   }
 
   // Touch swipe navigation
@@ -319,39 +321,117 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
         </div>
       )}
 
-      {/* PDF viewer — window-driven size, no internal scroll */}
-      <div ref={containerRef}
-           className="bg-cream-pdf rounded-[14px] overflow-hidden flex items-center justify-center p-2"
-           onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
-        {pdfFileUrl && (
-          <Document
-            file={pdfFileUrl}
-            onLoadSuccess={async (doc) => {
-              setNumPages(doc.numPages)
-              try {
-                const firstPage = await doc.getPage(1)
-                const vp = firstPage.getViewport({ scale: 1 })
-                setAspectRatio(vp.width / vp.height)
-              } catch (_) {}
-            }}
-            loading={<div className="p-8 text-brown-mute text-center text-sm">加载 PDF...</div>}
-            error={<div className="p-8 text-red-400 text-center text-sm">PDF 加载失败</div>}
-          >
-            {showDual && currentPage > 1 ? (
-              <div className={`flex gap-2 justify-center items-start ${dualLayout === 'vertical' ? 'flex-col' : ''}`}>
-                <Page pageNumber={currentPage} width={pageWidth}
-                  renderTextLayer={false} renderAnnotationLayer={false} />
-                {currentPage + 1 <= numPages && (
-                  <Page pageNumber={currentPage + 1} width={pageWidth}
-                    renderTextLayer={false} renderAnnotationLayer={false} />
-                )}
-              </div>
-            ) : (
-              <Page pageNumber={currentPage} width={pageWidth}
-                renderTextLayer={false} renderAnnotationLayer={false} />
-            )}
-          </Document>
+      {/* PDF viewer — annotation button + toolbar + viewer */}
+      <div className="relative">
+        {/* 批注按钮（右上角） */}
+        {activeLibId && (
+          <button
+            onClick={() => { setAnnotMode(m => !m); setActiveTool(null); setDeleteMode(false); setPendingPos(null) }}
+            className={`absolute top-2 right-2 z-20 px-3 py-1.5 rounded-[10px] text-xs font-extrabold shadow-md
+              ${annotMode ? 'bg-peach text-white' : 'bg-white text-brown-text'}`}>
+            ✏️ 批注
+          </button>
         )}
+
+        {/* 工具栏 */}
+        {annotMode && activeLibId && (
+          <div className="absolute top-12 right-2 z-20 bg-white rounded-[12px] shadow-lg p-2 flex flex-col gap-2">
+            <div className="flex gap-1.5">
+              <button
+                onClick={() => { setActiveTool(t => t === 'text' ? null : 'text'); setDeleteMode(false) }}
+                className={`w-9 h-9 rounded-lg font-extrabold ${activeTool === 'text' ? 'bg-peach text-white' : 'bg-cream text-brown-text'}`}>
+                T
+              </button>
+              <button disabled title="手绘（即将推出）"
+                className="w-9 h-9 rounded-lg bg-cream text-brown-faint opacity-40 cursor-not-allowed">
+                ✂
+              </button>
+              <button
+                onClick={() => { setDeleteMode(d => !d); setActiveTool(null) }}
+                className={`w-9 h-9 rounded-lg ${deleteMode ? 'bg-red-500 text-white' : 'bg-cream text-brown-text'}`}>
+                🗑
+              </button>
+            </div>
+            <div className="flex gap-1.5">
+              {['#E07A5F', '#C54B38', '#81B29A', '#4A90D9'].map(c => (
+                <button key={c} onClick={() => setAnnotColor(c)}
+                  className={`w-7 h-7 rounded-full border-2 ${annotColor === c ? 'border-brown-text' : 'border-transparent'}`}
+                  style={{ background: c }} />
+              ))}
+            </div>
+            {showDual && currentPage > 1 && (
+              <p className="text-[10px] text-brown-mute w-32">双页模式定位不可用，请切单页批注</p>
+            )}
+          </div>
+        )}
+
+        <div ref={containerRef}
+             className="bg-cream-pdf rounded-[14px] overflow-hidden flex items-center justify-center p-2"
+             onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
+          {pdfFileUrl && (
+            <Document
+              file={pdfFileUrl}
+              onLoadSuccess={async (doc) => {
+                setNumPages(doc.numPages)
+                try {
+                  const firstPage = await doc.getPage(1)
+                  const vp = firstPage.getViewport({ scale: 1 })
+                  setAspectRatio(vp.width / vp.height)
+                } catch (_) {}
+              }}
+              loading={<div className="p-8 text-brown-mute text-center text-sm">加载 PDF...</div>}
+              error={<div className="p-8 text-red-400 text-center text-sm">PDF 加载失败</div>}
+            >
+              {showDual && currentPage > 1 ? (
+                <div className={`flex gap-2 justify-center items-start ${dualLayout === 'vertical' ? 'flex-col' : ''}`}>
+                  <Page pageNumber={currentPage} width={pageWidth}
+                    renderTextLayer={false} renderAnnotationLayer={false} />
+                  {currentPage + 1 <= numPages && (
+                    <Page pageNumber={currentPage + 1} width={pageWidth}
+                      renderTextLayer={false} renderAnnotationLayer={false} />
+                  )}
+                </div>
+              ) : (
+                <div className="relative inline-block">
+                  <Page pageNumber={currentPage} width={pageWidth}
+                    renderTextLayer={false} renderAnnotationLayer={false} />
+                  {/* 批注 overlay（仅批注模式 + 单页）*/}
+                  {annotMode && (
+                    <div className="absolute inset-0 cursor-crosshair"
+                      onClick={e => {
+                        if (activeTool !== 'text' || deleteMode) return
+                        const rect = e.currentTarget.getBoundingClientRect()
+                        const x = (e.clientX - rect.left) / rect.width
+                        const y = (e.clientY - rect.top) / rect.height
+                        setPendingPos({ x, y }); setPendingText('')
+                      }}>
+                      {pendingPos && (
+                        <div className="absolute z-10" style={{ left: `${pendingPos.x * 100}%`, top: `${pendingPos.y * 100}%` }}>
+                          <input autoFocus value={pendingText} onChange={e => setPendingText(e.target.value)}
+                            onClick={e => e.stopPropagation()}
+                            onKeyDown={e => { if (e.key === 'Enter') saveAnnotation() }}
+                            placeholder="输入提示…"
+                            className="text-xs bg-white border-2 border-peach rounded px-2 py-1 shadow-lg w-40" />
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {/* 已有定位气泡（始终显示）*/}
+                  {annotations.filter(a => a.pos_x != null && a.pos_y != null).map(a => (
+                    <div key={a.id} className="absolute z-[5] -translate-x-1/2 -translate-y-1/2"
+                      style={{ left: `${a.pos_x! * 100}%`, top: `${a.pos_y! * 100}%` }}
+                      onClick={e => { e.stopPropagation(); if (deleteMode) deleteAnnotation(a.id) }}>
+                      <span className="inline-block text-[11px] font-bold text-white px-2 py-0.5 rounded-full shadow-md whitespace-nowrap"
+                        style={{ background: a.color }}>
+                        {deleteMode ? '🗑 ' : ''}{a.message}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Document>
+          )}
+        </div>
       </div>
 
       {/* Manual page navigation */}
@@ -367,38 +447,6 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
           下一页 →
         </button>
       </div>
-
-      {/* Sprint 3A: 家长批注 */}
-      {activeLibId && (
-        <div className="bg-cream rounded-[12px] p-3 mt-1">
-          <p className="text-xs font-extrabold text-brown-text mb-2">
-            📝 给孩子的提示（第 {currentPage} 页）
-          </p>
-          {annotations.length > 0 && (
-            <ul className="space-y-1 mb-2">
-              {annotations.map(a => (
-                <li key={a.id} className="text-sm text-brown-text bg-white rounded-[8px] px-3 py-1.5">
-                  {a.message}
-                </li>
-              ))}
-            </ul>
-          )}
-          <div className="flex gap-2">
-            <input
-              type="text" value={annotInput} onChange={e => setAnnotInput(e.target.value)}
-              placeholder="如：apple 读错了，正确读音…"
-              className="flex-1 bg-white rounded-[8px] px-3 py-2 text-sm text-brown-text
-                border-2 border-transparent focus:border-peach outline-none"
-              onKeyDown={e => { if (e.key === 'Enter') saveAnnotation() }}
-            />
-            <button onClick={saveAnnotation} disabled={savingAnnot || !annotInput.trim()}
-              className="bg-peach text-white text-sm font-extrabold px-4 py-2 rounded-[8px]
-                hover:opacity-90 disabled:opacity-40 transition-opacity shrink-0">
-              {savingAnnot ? '保存中' : '保存'}
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   )
 }
