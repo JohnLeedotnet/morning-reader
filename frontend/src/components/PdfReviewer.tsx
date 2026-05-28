@@ -50,13 +50,15 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
   const [numPages,    setNumPages]   = useState(0)
   const [autoFollow,  setAutoFollow] = useState(true)
   const [manualOverride, setManualOverride] = useState(false)
-  const [annotations,   setAnnotations]  = useState<Array<{ id: number; message: string; pos_x: number | null; pos_y: number | null; color: string }>>([])
+  const [annotations,   setAnnotations]  = useState<Array<{ id: number; message: string; pos_x: number | null; pos_y: number | null; color: string; drawing_svg?: string | null }>>([])
   const [annotMode,     setAnnotMode]    = useState(false)
-  const [activeTool,    setActiveTool]   = useState<'text' | null>(null)
+  const [activeTool,    setActiveTool]   = useState<'text' | 'draw' | null>(null)
   const [annotColor,    setAnnotColor]   = useState('#E07A5F')
   const [deleteMode,    setDeleteMode]   = useState(false)
   const [pendingPos,    setPendingPos]   = useState<{ x: number; y: number } | null>(null)
   const [pendingText,   setPendingText]  = useState('')
+  const [currentStroke, setCurrentStroke] = useState<Array<[number, number]>>([])
+  const isDrawingRef = useRef(false)
 
   // Window size for stable, content-independent page width calculation
   const [winW, setWinW] = useState(window.innerWidth)
@@ -231,7 +233,7 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
     })
     if (res.ok) {
       const c = await res.json()
-      setAnnotations(prev => [...prev, { id: c.id, message: c.message, pos_x: c.pos_x, pos_y: c.pos_y, color: c.color }])
+      setAnnotations(prev => [...prev, { id: c.id, message: c.message, pos_x: c.pos_x, pos_y: c.pos_y, color: c.color, drawing_svg: null }])
       setPendingPos(null); setPendingText('')
     }
   }
@@ -239,6 +241,23 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
   const deleteAnnotation = async (id: number) => {
     const res = await adminFetch(`/api/admin/annotations/${id}`, { method: 'DELETE' })
     if (res.ok) setAnnotations(prev => prev.filter(a => a.id !== id))
+  }
+
+  const saveDrawing = async (stroke: Array<[number, number]>) => {
+    const libId = activePdf ? (pdfReads.find(r => r.pdf_filename === activePdf)?.pdf_library_id ?? null) : null
+    if (!libId || stroke.length < 2) return
+    const res = await adminFetch('/api/admin/annotations', {
+      method: 'POST',
+      body: JSON.stringify({
+        pdf_library_id: libId, page_number: currentPage, message: '',
+        session_id: sessionId, pos_x: stroke[0][0], pos_y: stroke[0][1],
+        color: annotColor, drawing_svg: JSON.stringify(stroke),
+      }),
+    })
+    if (res.ok) {
+      const c = await res.json()
+      setAnnotations(prev => [...prev, { id: c.id, message: c.message, pos_x: c.pos_x, pos_y: c.pos_y, color: c.color, drawing_svg: c.drawing_svg }])
+    }
   }
 
   // Touch swipe navigation
@@ -342,8 +361,9 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
                 className={`w-9 h-9 rounded-lg font-extrabold ${activeTool === 'text' ? 'bg-peach text-white' : 'bg-cream text-brown-text'}`}>
                 T
               </button>
-              <button disabled title="手绘（即将推出）"
-                className="w-9 h-9 rounded-lg bg-cream text-brown-faint opacity-40 cursor-not-allowed">
+              <button
+                onClick={() => { setActiveTool(t => t === 'draw' ? null : 'draw'); setDeleteMode(false) }}
+                className={`w-9 h-9 rounded-lg font-extrabold ${activeTool === 'draw' ? 'bg-peach text-white' : 'bg-cream text-brown-text'}`}>
                 ✂
               </button>
               <button
@@ -397,14 +417,38 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
                     renderTextLayer={false} renderAnnotationLayer={false} />
                   {/* 批注 overlay（仅批注模式 + 单页）*/}
                   {annotMode && (
-                    <div className="absolute inset-0 cursor-crosshair"
+                    <div className="absolute inset-0 cursor-crosshair touch-none"
                       onClick={e => {
                         if (activeTool !== 'text' || deleteMode) return
                         const rect = e.currentTarget.getBoundingClientRect()
-                        const x = (e.clientX - rect.left) / rect.width
-                        const y = (e.clientY - rect.top) / rect.height
-                        setPendingPos({ x, y }); setPendingText('')
+                        setPendingPos({ x: (e.clientX - rect.left) / rect.width, y: (e.clientY - rect.top) / rect.height })
+                        setPendingText('')
+                      }}
+                      onPointerDown={e => {
+                        if (activeTool !== 'draw' || deleteMode) return
+                        const rect = e.currentTarget.getBoundingClientRect()
+                        isDrawingRef.current = true
+                        setCurrentStroke([[(e.clientX - rect.left) / rect.width, (e.clientY - rect.top) / rect.height]])
+                        ;(e.target as Element).setPointerCapture(e.pointerId)
+                      }}
+                      onPointerMove={e => {
+                        if (!isDrawingRef.current || activeTool !== 'draw') return
+                        const rect = e.currentTarget.getBoundingClientRect()
+                        const nx = (e.clientX - rect.left) / rect.width
+                        const ny = (e.clientY - rect.top) / rect.height
+                        setCurrentStroke(prev => {
+                          const last = prev[prev.length - 1]
+                          if (last && Math.hypot(nx - last[0], ny - last[1]) < 0.005) return prev
+                          return [...prev, [nx, ny]]
+                        })
+                      }}
+                      onPointerUp={() => {
+                        if (!isDrawingRef.current) return
+                        isDrawingRef.current = false
+                        if (currentStroke.length >= 2) saveDrawing(currentStroke)
+                        setCurrentStroke([])
                       }}>
+                      {/* 待输入文字定位框 */}
                       {pendingPos && (
                         <div className="absolute z-10" style={{ left: `${pendingPos.x * 100}%`, top: `${pendingPos.y * 100}%` }}>
                           <input autoFocus value={pendingText} onChange={e => setPendingText(e.target.value)}
@@ -414,10 +458,18 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
                             className="text-xs bg-white border-2 border-peach rounded px-2 py-1 shadow-lg w-40" />
                         </div>
                       )}
+                      {/* 正在绘制的笔画实时预览 */}
+                      {currentStroke.length > 0 && (
+                        <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 1 1" preserveAspectRatio="none">
+                          <polyline points={currentStroke.map(p => `${p[0]},${p[1]}`).join(' ')}
+                            fill="none" stroke={annotColor} strokeWidth="2.5"
+                            vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      )}
                     </div>
                   )}
-                  {/* 已有定位气泡（始终显示）*/}
-                  {annotations.filter(a => a.pos_x != null && a.pos_y != null).map(a => (
+                  {/* 已有定位气泡（文字批注，始终显示）*/}
+                  {annotations.filter(a => a.pos_x != null && a.pos_y != null && !a.drawing_svg).map(a => (
                     <div key={a.id} className="absolute z-[5] -translate-x-1/2 -translate-y-1/2"
                       style={{ left: `${a.pos_x! * 100}%`, top: `${a.pos_y! * 100}%` }}
                       onClick={e => { e.stopPropagation(); if (deleteMode) deleteAnnotation(a.id) }}>
@@ -427,6 +479,22 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
                       </span>
                     </div>
                   ))}
+                  {/* 已有手绘批注（SVG）*/}
+                  {annotations.filter(a => a.drawing_svg).map(a => {
+                    let pts: Array<[number, number]> = []
+                    try { pts = JSON.parse(a.drawing_svg!) } catch (_) { return null }
+                    if (pts.length < 2) return null
+                    return (
+                      <svg key={a.id} className={`absolute inset-0 w-full h-full ${deleteMode ? 'cursor-pointer' : 'pointer-events-none'}`}
+                        viewBox="0 0 1 1" preserveAspectRatio="none"
+                        onClick={deleteMode ? (e => { e.stopPropagation(); deleteAnnotation(a.id) }) : undefined}>
+                        <polyline points={pts.map(p => `${p[0]},${p[1]}`).join(' ')}
+                          fill="none" stroke={a.color} strokeWidth={deleteMode ? '4' : '2.5'}
+                          vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round"
+                          opacity={deleteMode ? 0.6 : 1} />
+                      </svg>
+                    )
+                  })}
                 </div>
               )}
             </Document>

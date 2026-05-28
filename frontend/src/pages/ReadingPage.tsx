@@ -102,7 +102,7 @@ export default function ReadingPage() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
   const [error,        setError]        = useState('')
-  const [pageAnnotations, setPageAnnotations] = useState<Array<{ id: number; message: string; pos_x: number | null; pos_y: number | null; color: string }>>([])
+  const [pageAnnotations, setPageAnnotations] = useState<Array<{ id: number; message: string; pos_x: number | null; pos_y: number | null; color: string; drawing_svg?: string | null }>>([])
 
   const [aspectRatio,  setAspectRatio]  = useState(0.707)  // PDF page w/h, default A4 portrait
 
@@ -458,12 +458,15 @@ export default function ReadingPage() {
         {/* ── 双页时定位不可用，降级为顶部列表 fallback（Sprint 3A-v2）── */}
         {showDualPage && pageAnnotations.length > 0 && (
           <div className="bg-peach/10 border-2 border-peach rounded-[12px] mx-3 mt-1.5 p-3 shrink-0">
-            {pageAnnotations.map(a => (
+            {pageAnnotations.filter(a => a.message).map(a => (
               <p key={a.id} className="text-brown-text font-bold text-sm flex items-start gap-2">
                 <span className="shrink-0">👨‍👩‍👧 家长提示：</span>
                 <span>{a.message}</span>
               </p>
             ))}
+            {pageAnnotations.some(a => a.drawing_svg) && (
+              <p className="text-brown-mute text-xs px-3">✏️ 本页有手绘批注，切单页查看</p>
+            )}
           </div>
         )}
 
@@ -511,7 +514,7 @@ export default function ReadingPage() {
                 )}
               </Document>
               {/* 单页定位气泡（pointer-events-none 不挡翻页）*/}
-              {!showDualPage && pageAnnotations.filter(a => a.pos_x != null && a.pos_y != null).map(a => (
+              {!showDualPage && pageAnnotations.filter(a => a.pos_x != null && a.pos_y != null && !a.drawing_svg).map(a => (
                 <div key={a.id} className="absolute z-10 -translate-x-1/2 -translate-y-1/2 pointer-events-none"
                   style={{ left: `${a.pos_x! * 100}%`, top: `${a.pos_y! * 100}%` }}>
                   <span className="inline-block text-xs font-bold text-white px-2 py-1 rounded-full shadow-lg whitespace-nowrap"
@@ -520,6 +523,20 @@ export default function ReadingPage() {
                   </span>
                 </div>
               ))}
+              {/* 单页手绘批注（只读）*/}
+              {!showDualPage && pageAnnotations.filter(a => a.drawing_svg).map(a => {
+                let pts: Array<[number, number]> = []
+                try { pts = JSON.parse(a.drawing_svg!) } catch (_) { return null }
+                if (pts.length < 2) return null
+                return (
+                  <svg key={a.id} className="absolute inset-0 w-full h-full pointer-events-none z-10"
+                    viewBox="0 0 1 1" preserveAspectRatio="none">
+                    <polyline points={pts.map(p => `${p[0]},${p[1]}`).join(' ')}
+                      fill="none" stroke={a.color} strokeWidth="2.5"
+                      vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                )
+              })}
               {eyeStripes && (
                 <div
                   className="absolute inset-0 pointer-events-none rounded-[4px]"

@@ -1153,16 +1153,19 @@ app.get('/api/admin/pool/preview/:childId', requireParent, (req, res) => {
 // 家长保存批注（PIN 解锁）
 app.post('/api/admin/annotations', requireParent, (req, res) => {
   try {
-    const { pdf_library_id, page_number, message, session_id, pos_x, pos_y, color } = req.body
-    if (!pdf_library_id || !page_number || !message?.trim()) {
-      return res.status(400).json({ error: 'pdf_library_id, page_number, message required' })
+    const { pdf_library_id, page_number, message, session_id, pos_x, pos_y, color, drawing_svg } = req.body
+    const hasDrawing = drawing_svg != null && drawing_svg !== ''
+    // 文字批注需 message；手绘批注需 drawing_svg
+    if (!pdf_library_id || !page_number || (!message?.trim() && !hasDrawing)) {
+      return res.status(400).json({ error: 'pdf_library_id, page_number, and (message or drawing_svg) required' })
     }
+    const kind = hasDrawing ? 'drawing' : 'text'
     const result = db.prepare(`
       INSERT INTO pdf_annotations
-        (account_id, pdf_library_id, page_number, message, created_by_session, pos_x, pos_y, color, kind)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'text')
-    `).run(req.accountId, pdf_library_id, page_number, message.trim(), session_id ?? null,
-           pos_x ?? null, pos_y ?? null, color ?? '#E07A5F')
+        (account_id, pdf_library_id, page_number, message, created_by_session, pos_x, pos_y, color, kind, drawing_svg)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(req.accountId, pdf_library_id, page_number, (message ?? '').trim(), session_id ?? null,
+           pos_x ?? null, pos_y ?? null, color ?? '#E07A5F', kind, hasDrawing ? drawing_svg : null)
     res.json(db.prepare('SELECT * FROM pdf_annotations WHERE id = ?').get(result.lastInsertRowid))
   } catch (err) {
     res.status(500).json({ error: err.message })
