@@ -5,6 +5,7 @@ const fs = require('fs');
 const http = require('http');
 const https = require('https');
 const multer = require('multer');
+const crypto = require('crypto');
 
 const db = require('./db');
 const adminAuth = require('./adminAuth');
@@ -35,6 +36,11 @@ const PORT = 3001;
 const RECORDINGS_DIR = path.join(__dirname, '../../data/recordings');
 if (!fs.existsSync(RECORDINGS_DIR)) fs.mkdirSync(RECORDINGS_DIR, { recursive: true });
 
+const PDFS_DIR = path.join(__dirname, '../../data/pdfs');
+const PDFS_TMP_DIR = path.join(PDFS_DIR, '_tmp');
+if (!fs.existsSync(PDFS_DIR)) fs.mkdirSync(PDFS_DIR, { recursive: true });
+if (!fs.existsSync(PDFS_TMP_DIR)) fs.mkdirSync(PDFS_TMP_DIR, { recursive: true });
+
 const AUTO_DISCARD_MIN_DURATION_S = 20
 const AUTO_DISCARD_MAX_SILENCE_RATIO = 0.7
 
@@ -48,6 +54,19 @@ const upload = multer({
   }),
   limits: { fileSize: 200 * 1024 * 1024 },
 });
+
+// Sprint 2B: PDF 上传专用 multer（写到 PDFS_TMP_DIR，后续算 sha256 + rename 入正式桶）
+const uploadPdf = multer({
+  storage: multer.diskStorage({
+    destination: PDFS_TMP_DIR,
+    filename: (_req, _file, cb) => cb(null, `upload_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.pdf`),
+  }),
+  limits: { fileSize: 200 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype === 'application/pdf' || file.originalname?.toLowerCase().endsWith('.pdf')) cb(null, true)
+    else cb(new Error('仅支持 PDF 文件'))
+  },
+})
 
 function todayLocal() {
   const d = new Date()
@@ -385,6 +404,147 @@ app.get('/api/library/:id/file', (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// ── Sprint 2B: 用户上传 PDF ─────────────────────────────────────────────────
+
+// POST 上传 PDF（登录用户）
+app.post('/api/library/upload', uploadPdf.single('pdf'), (req, res) => {
+  let tmpPath = req.file?.path
+  try {
+    const session = auth.getCurrentSession(db, req.cookies?.auth_token)
+    if (!session) { if (tmpPath) try { fs.unlinkSync(tmpPath) } catch(_){} ; return res.status(401).json({ error: 'not authenticated' }) }
+    if (!req.file) return res.status(400).json({ error: 'PDF file required' })
+    const accountId = session.account_id
+    const isSuperAdmin = session.is_superadmin === 1
+
+    // 算 sha256
+    const buf = fs.readFileSync(tmpPath)
+    const sha = crypto.createHash('sha256').update(buf).digest('hex')
+    const sizeBytes = buf.length
+    const sizeMb = Math.ceil(sizeBytes / 1024 / 1024)
+    const origFilename = req.file.originalname || 'untitled.pdf'
+
+    // 去重：sha256 已存在
+    const existing = db.prepare('SELECT id, filename, uploader_account_id, is_private FROM pdf_library WHERE sha256 = ?').get(sha)
+    if (existing) {
+      try { fs.unlinkSync(tmpPath) } catch(_) {}
+      const canSee = isSuperAdmin || existing.is_private === 0 || existing.uploader_account_id === accountId
+      return res.json({
+        duplicate: true,
+        library_id: canSee ? existing.id : null,
+        filename: existing.filename,
+        message: canSee ? '图书馆已有此书，已为你复用' : '图书馆已有此书（私有，无权访问）',
+      })
+    }
+
+    // 配额检查（superadmin 跳过）
+    if (!isSuperAdmin) {
+      const acct = db.prepare('SELECT storage_used_mb, storage_quota_mb FROM accounts WHERE id = ?').get(accountId)
+      if ((acct.storage_used_mb + sizeMb) > acct.storage_quota_mb) {
+        try { fs.unlinkSync(tmpPath) } catch(_) {}
+        return res.status(413).json({
+          error: 'quota exceeded',
+          used_mb: acct.storage_used_mb, quota_mb: acct.storage_quota_mb, file_mb: sizeMb,
+        })
+      }
+    }
+
+    // mv tmp → 正式桶
+    const bucket = path.join(PDFS_DIR, sha.slice(0, 2))
+    if (!fs.existsSync(bucket)) fs.mkdirSync(bucket, { recursive: true })
+    const destPath = path.join(bucket, sha + '.pdf')
+    fs.renameSync(tmpPath, destPath)
+    tmpPath = null
+
+    // 插库 + 更新配额
+    const result = db.prepare(`
+      INSERT INTO pdf_library (sha256, filename, title, size_bytes, uploader_account_id, is_private, is_builtin, category_path)
+      VALUES (?, ?, ?, ?, ?, 1, 0, '我的上传')
+    `).run(sha, origFilename, origFilename.replace(/\.pdf$/i, ''), sizeBytes, accountId)
+    if (!isSuperAdmin) {
+      db.prepare('UPDATE accounts SET storage_used_mb = storage_used_mb + ? WHERE id = ?').run(sizeMb, accountId)
+    }
+
+    res.json({
+      duplicate: false,
+      library_id: result.lastInsertRowid,
+      filename: origFilename,
+      size_mb: sizeMb,
+    })
+  } catch (err) {
+    if (tmpPath) try { fs.unlinkSync(tmpPath) } catch(_) {}
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// GET 当前账号上传列表 + 配额信息
+app.get('/api/library/mine', (req, res) => {
+  try {
+    const session = auth.getCurrentSession(db, req.cookies?.auth_token)
+    if (!session) return res.status(401).json({ error: 'not authenticated' })
+    const accountId = session.account_id
+    const isSuperAdmin = session.is_superadmin === 1
+    const items = db.prepare(`
+      SELECT id, sha256, filename, title, size_bytes, is_private, created_at
+      FROM pdf_library WHERE uploader_account_id = ?
+      ORDER BY created_at DESC
+    `).all(accountId)
+    const acct = db.prepare('SELECT storage_used_mb, storage_quota_mb FROM accounts WHERE id = ?').get(accountId)
+    res.json({
+      items,
+      used_mb: acct.storage_used_mb,
+      quota_mb: acct.storage_quota_mb,
+      unlimited: isSuperAdmin,
+    })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// PATCH 切换 is_private（仅自家上传或 superadmin）
+app.patch('/api/library/:id/visibility', (req, res) => {
+  try {
+    const session = auth.getCurrentSession(db, req.cookies?.auth_token)
+    if (!session) return res.status(401).json({ error: 'not authenticated' })
+    const lib = db.prepare('SELECT id, uploader_account_id FROM pdf_library WHERE id = ?').get(req.params.id)
+    if (!lib) return res.status(404).json({ error: 'not found' })
+    if (lib.uploader_account_id !== session.account_id && session.is_superadmin !== 1) {
+      return res.status(403).json({ error: 'forbidden' })
+    }
+    const { is_private } = req.body
+    db.prepare('UPDATE pdf_library SET is_private = ? WHERE id = ?').run(is_private ? 1 : 0, req.params.id)
+    res.json({ ok: true, is_private: is_private ? 1 : 0 })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// DELETE 自家上传的 PDF（superadmin 任意）
+app.delete('/api/library/:id', (req, res) => {
+  try {
+    const session = auth.getCurrentSession(db, req.cookies?.auth_token)
+    if (!session) return res.status(401).json({ error: 'not authenticated' })
+    const lib = db.prepare('SELECT id, sha256, size_bytes, uploader_account_id, is_builtin FROM pdf_library WHERE id = ?').get(req.params.id)
+    if (!lib) return res.status(404).json({ error: 'not found' })
+    if (lib.is_builtin) return res.status(403).json({ error: 'cannot delete builtin' })
+    if (lib.uploader_account_id !== session.account_id && session.is_superadmin !== 1) {
+      return res.status(403).json({ error: 'forbidden' })
+    }
+    // 删物理文件
+    const filePath = path.join(PDFS_DIR, lib.sha256.slice(0, 2), lib.sha256 + '.pdf')
+    try { fs.unlinkSync(filePath) } catch(_) {}
+    // 删库
+    db.prepare('DELETE FROM pdf_library WHERE id = ?').run(req.params.id)
+    // 减回配额（仅当 uploader 是当前账号且非 superadmin）
+    if (lib.uploader_account_id === session.account_id && session.is_superadmin !== 1 && lib.size_bytes) {
+      const sizeMb = Math.ceil(lib.size_bytes / 1024 / 1024)
+      db.prepare('UPDATE accounts SET storage_used_mb = MAX(0, storage_used_mb - ?) WHERE id = ?').run(sizeMb, lib.uploader_account_id)
+    }
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
 
 app.get('/api/config', (req, res) => {
   try {

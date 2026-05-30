@@ -563,6 +563,142 @@ interface MeData {
   is_superadmin: boolean
 }
 
+function UploadsTab() {
+  const [items, setItems] = useState<Array<{ id: number; filename: string; size_bytes: number; is_private: number; created_at: string }>>([])
+  const [usedMb, setUsedMb] = useState(0)
+  const [quotaMb, setQuotaMb] = useState(200)
+  const [unlimited, setUnlimited] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [progress, setProgress] = useState<number | null>(null)
+  const [dragOver, setDragOver] = useState(false)
+  const [message, setMessage] = useState('')
+
+  const refresh = () => {
+    fetch('/api/library/mine')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (!d) return
+        setItems(d.items); setUsedMb(d.used_mb); setQuotaMb(d.quota_mb); setUnlimited(d.unlimited)
+      })
+  }
+  useEffect(refresh, [])
+
+  const upload = async (file: File) => {
+    if (!file.name.toLowerCase().endsWith('.pdf')) { setMessage('仅支持 PDF'); return }
+    if (file.size > 200 * 1024 * 1024) { setMessage('单文件不能超过 200 MB'); return }
+    setUploading(true); setProgress(0); setMessage('')
+    const fd = new FormData()
+    fd.append('pdf', file)
+    try {
+      const data: Record<string, unknown> = await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest()
+        xhr.open('POST', '/api/library/upload')
+        xhr.upload.onprogress = e => { if (e.lengthComputable) setProgress(Math.round((e.loaded / e.total) * 100)) }
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            try { resolve(JSON.parse(xhr.responseText)) } catch (e) { reject(e) }
+          } else {
+            try { reject(new Error((JSON.parse(xhr.responseText) as { error?: string }).error || `HTTP ${xhr.status}`)) }
+            catch { reject(new Error(`HTTP ${xhr.status}`)) }
+          }
+        }
+        xhr.onerror = () => reject(new Error('网络错误'))
+        xhr.send(fd)
+      })
+      setMessage(data.duplicate ? ((data.message as string) || '已存在') : `✓ 上传成功：${data.filename as string}`)
+      refresh()
+    } catch (e) {
+      setMessage(`❌ ${(e as Error).message}`)
+    } finally {
+      setUploading(false); setProgress(null)
+    }
+  }
+
+  const onFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''
+  }
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault(); setDragOver(false)
+    const f = e.dataTransfer.files?.[0]; if (f) upload(f)
+  }
+
+  const toggleVisibility = async (id: number, currentPrivate: number) => {
+    await fetch(`/api/library/${id}/visibility`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ is_private: currentPrivate ? 0 : 1 }),
+    })
+    refresh()
+  }
+  const doDelete = async (id: number, filename: string) => {
+    if (!confirm(`确认删除「${filename}」？`)) return
+    await fetch(`/api/library/${id}`, { method: 'DELETE' })
+    refresh()
+  }
+
+  const usedPct = unlimited ? 0 : Math.min(100, Math.round((usedMb / quotaMb) * 100))
+
+  return (
+    <div className="space-y-4">
+      {/* 配额 */}
+      <div className="bg-white rounded-[16px] p-4 shadow-[0_4px_24px_rgba(224,122,95,0.08)]">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-sm font-extrabold text-brown-text">存储配额</span>
+          <span className="text-sm font-bold text-brown-mute">
+            {unlimited ? '无限制（superadmin）' : `${usedMb} / ${quotaMb} MB`}
+          </span>
+        </div>
+        {!unlimited && (
+          <div className="h-2 bg-cream rounded-full overflow-hidden">
+            <div className="h-full bg-peach transition-all" style={{ width: `${usedPct}%` }} />
+          </div>
+        )}
+      </div>
+
+      {/* 拖拽上传 */}
+      <div
+        onDragOver={e => { e.preventDefault(); setDragOver(true) }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={onDrop}
+        className={`bg-white rounded-[16px] p-8 text-center border-2 border-dashed transition-colors
+          ${dragOver ? 'border-peach bg-peach/5' : 'border-[#F0D8C8]'}`}>
+        <p className="text-brown-mute text-sm mb-3">拖拽 PDF 到此 或</p>
+        <label className="inline-block bg-peach text-white font-extrabold px-5 py-2 rounded-[12px] cursor-pointer hover:opacity-90">
+          选择文件
+          <input type="file" accept="application/pdf,.pdf" onChange={onFileInput} className="hidden" disabled={uploading} />
+        </label>
+        {uploading && progress !== null && (
+          <p className="text-brown-mute text-sm mt-3">上传中 {progress}%（请勿关闭页面）</p>
+        )}
+        {message && <p className="text-sm mt-3 text-brown-text">{message}</p>}
+      </div>
+
+      {/* 列表 */}
+      <div className="space-y-2">
+        {items.length === 0 ? (
+          <p className="text-brown-mute text-sm text-center py-4">还没有上传任何 PDF</p>
+        ) : items.map(it => (
+          <div key={it.id} className="bg-white rounded-[12px] p-3 flex items-center gap-3
+            shadow-[0_2px_12px_rgba(224,122,95,0.06)]">
+            <div className="flex-1 min-w-0">
+              <p className="font-bold text-brown-text text-sm truncate">{it.filename}</p>
+              <p className="text-xs text-brown-mute">{Math.ceil(it.size_bytes / 1024 / 1024)} MB · {it.created_at?.slice(0,10)}</p>
+            </div>
+            <button onClick={() => toggleVisibility(it.id, it.is_private)}
+              className={`text-xs font-extrabold px-3 py-1.5 rounded-[8px] transition-colors
+                ${it.is_private ? 'bg-cream text-brown-mute' : 'bg-mint/20 text-mint'}`}>
+              {it.is_private ? '🔒 私有' : '🌐 公开'}
+            </button>
+            <button onClick={() => doDelete(it.id, it.filename)}
+              className="text-xs font-extrabold text-red-500 hover:text-red-600 px-2 py-1.5">
+              删除
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function AccountInlineSettings() {
   const [me, setMe] = useState<MeData | null | undefined>(undefined)
   const [editingUsername, setEditingUsername] = useState(false)
@@ -783,7 +919,7 @@ export default function ParentPage() {
   const [lockSeconds, setLockSeconds] = useState(0)
 
   // Dashboard state
-  const [tab,          setTab]          = useState<'review' | 'pool' | 'recitation' | 'users'>('review')
+  const [tab,          setTab]          = useState<'review' | 'pool' | 'recitation' | 'users' | 'uploads'>('review')
   const [sessions,     setSessions]     = useState<Session[]>([])
   const [loadingSess,  setLoadingSess]  = useState(false)
   const [expandedAudio, setExpandedAudio] = useState<number | null>(null)
@@ -1170,6 +1306,11 @@ export default function ParentPage() {
               ${tab === 'users' ? 'bg-peach text-white' : 'bg-white text-brown-mute hover:bg-cream-card'}`}>
             用户管理
           </button>
+          <button onClick={() => setTab('uploads')}
+            className={`px-4 py-2 rounded-[12px] text-sm font-extrabold transition-colors
+              ${tab === 'uploads' ? 'bg-peach text-white' : 'bg-white text-brown-mute hover:bg-cream-card'}`}>
+            我的上传
+          </button>
         </div>
 
         {/* ── Review tab ── */}
@@ -1380,6 +1521,9 @@ export default function ParentPage() {
             )}
           </div>
         )}
+
+        {/* ── Uploads tab ── */}
+        {tab === 'uploads' && <UploadsTab />}
 
         {/* ── Users tab ── */}
         {tab === 'users' && (
