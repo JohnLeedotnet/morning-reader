@@ -104,6 +104,7 @@ try { db.exec("ALTER TABLE pdf_annotations ADD COLUMN pos_x REAL DEFAULT NULL");
 try { db.exec("ALTER TABLE pdf_annotations ADD COLUMN pos_y REAL DEFAULT NULL"); } catch(_) {}
 try { db.exec("ALTER TABLE pdf_annotations ADD COLUMN color TEXT DEFAULT '#E07A5F'"); } catch(_) {}
 try { db.exec("ALTER TABLE pdf_annotations ADD COLUMN kind TEXT DEFAULT 'text'"); } catch(_) {}
+try { db.exec("ALTER TABLE pdf_annotations ADD COLUMN font_scale REAL DEFAULT 1.0"); } catch(_) {}
 
 db.prepare("UPDATE children SET font_scale = 1.0  WHERE id = 'mike'").run();
 db.prepare("UPDATE children SET font_scale = 1.25 WHERE id = 'peyton'").run();

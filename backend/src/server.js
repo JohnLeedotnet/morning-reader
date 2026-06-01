@@ -1442,19 +1442,20 @@ app.get('/api/admin/pool/preview/:childId', requireParent, (req, res) => {
 // 家长保存批注（PIN 解锁）
 app.post('/api/admin/annotations', requireParent, (req, res) => {
   try {
-    const { pdf_library_id, page_number, message, session_id, pos_x, pos_y, color, drawing_svg } = req.body
+    const { pdf_library_id, page_number, message, session_id, pos_x, pos_y, color, drawing_svg, font_scale } = req.body
     const hasDrawing = drawing_svg != null && drawing_svg !== ''
     // 文字批注需 message；手绘批注需 drawing_svg
     if (!pdf_library_id || !page_number || (!message?.trim() && !hasDrawing)) {
       return res.status(400).json({ error: 'pdf_library_id, page_number, and (message or drawing_svg) required' })
     }
     const kind = hasDrawing ? 'drawing' : 'text'
+    const fs = (typeof font_scale === 'number' && font_scale >= 0.3 && font_scale <= 3.0) ? font_scale : 1.0
     const result = db.prepare(`
       INSERT INTO pdf_annotations
-        (account_id, pdf_library_id, page_number, message, created_by_session, pos_x, pos_y, color, kind, drawing_svg)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (account_id, pdf_library_id, page_number, message, created_by_session, pos_x, pos_y, color, kind, drawing_svg, font_scale)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(req.accountId, pdf_library_id, page_number, (message ?? '').trim(), session_id ?? null,
-           pos_x ?? null, pos_y ?? null, color ?? '#E07A5F', kind, hasDrawing ? drawing_svg : null)
+           pos_x ?? null, pos_y ?? null, color ?? '#E07A5F', kind, hasDrawing ? drawing_svg : null, fs)
     res.json(db.prepare('SELECT * FROM pdf_annotations WHERE id = ?').get(result.lastInsertRowid))
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -1496,22 +1497,28 @@ app.get('/api/annotations', (req, res) => {
   }
 })
 
-// Sprint 3-Annot-Edit: 编辑文字批注（message / color / pos_x / pos_y）
+// Sprint 3-Annot-Edit/Drag: 编辑 + 拖动批注
 app.patch('/api/admin/annotations/:id', requireParent, (req, res) => {
   try {
     const lib = db.prepare('SELECT id, account_id, kind, drawing_svg FROM pdf_annotations WHERE id = ?').get(req.params.id)
     if (!lib) return res.status(404).json({ error: 'not found' })
     if (lib.account_id !== req.accountId) return res.status(403).json({ error: 'forbidden' })
-    if (lib.kind === 'drawing' || lib.drawing_svg) {
-      return res.status(400).json({ error: 'drawing annotations are not editable; delete and redraw' })
-    }
-    const { message, color, pos_x, pos_y } = req.body
+    const isDrawing = lib.kind === 'drawing' || !!lib.drawing_svg
+    const { message, color, pos_x, pos_y, drawing_svg, font_scale } = req.body
     const fields = []
     const params = []
-    if (typeof message === 'string') { fields.push('message = ?'); params.push(message.trim()) }
-    if (typeof color === 'string')   { fields.push('color = ?');   params.push(color) }
+    if (!isDrawing) {
+      if (typeof message === 'string') { fields.push('message = ?'); params.push(message.trim()) }
+      if (typeof color === 'string')   { fields.push('color = ?');   params.push(color) }
+      if (typeof font_scale === 'number' && font_scale >= 0.3 && font_scale <= 3.0) {
+        fields.push('font_scale = ?'); params.push(font_scale)
+      }
+    }
     if (typeof pos_x === 'number')   { fields.push('pos_x = ?');   params.push(pos_x) }
     if (typeof pos_y === 'number')   { fields.push('pos_y = ?');   params.push(pos_y) }
+    if (typeof drawing_svg === 'string' && isDrawing) {
+      fields.push('drawing_svg = ?'); params.push(drawing_svg)
+    }
     if (fields.length === 0) return res.status(400).json({ error: 'no fields to update' })
     params.push(req.params.id)
     db.prepare(`UPDATE pdf_annotations SET ${fields.join(', ')} WHERE id = ?`).run(...params)
