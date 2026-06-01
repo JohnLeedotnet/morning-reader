@@ -1498,6 +1498,31 @@ app.get('/api/annotations', (req, res) => {
   }
 })
 
+// Sprint 3-Annot-Edit: 编辑文字批注（message / color / pos_x / pos_y）
+app.patch('/api/admin/annotations/:id', requireParent, (req, res) => {
+  try {
+    const lib = db.prepare('SELECT id, account_id, kind, drawing_svg FROM pdf_annotations WHERE id = ?').get(req.params.id)
+    if (!lib) return res.status(404).json({ error: 'not found' })
+    if (lib.account_id !== req.accountId) return res.status(403).json({ error: 'forbidden' })
+    if (lib.kind === 'drawing' || lib.drawing_svg) {
+      return res.status(400).json({ error: 'drawing annotations are not editable; delete and redraw' })
+    }
+    const { message, color, pos_x, pos_y } = req.body
+    const fields = []
+    const params = []
+    if (typeof message === 'string') { fields.push('message = ?'); params.push(message.trim()) }
+    if (typeof color === 'string')   { fields.push('color = ?');   params.push(color) }
+    if (typeof pos_x === 'number')   { fields.push('pos_x = ?');   params.push(pos_x) }
+    if (typeof pos_y === 'number')   { fields.push('pos_y = ?');   params.push(pos_y) }
+    if (fields.length === 0) return res.status(400).json({ error: 'no fields to update' })
+    params.push(req.params.id)
+    db.prepare(`UPDATE pdf_annotations SET ${fields.join(', ')} WHERE id = ?`).run(...params)
+    res.json(db.prepare('SELECT * FROM pdf_annotations WHERE id = ?').get(req.params.id))
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // 删除批注（家长，account 隔离）
 app.delete('/api/admin/annotations/:id', requireParent, (req, res) => {
   try {

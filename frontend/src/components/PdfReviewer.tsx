@@ -52,13 +52,17 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
   const [manualOverride, setManualOverride] = useState(false)
   const [annotations,   setAnnotations]  = useState<Array<{ id: number; message: string; pos_x: number | null; pos_y: number | null; color: string; drawing_svg?: string | null }>>([])
   const [annotMode,     setAnnotMode]    = useState(false)
-  const [activeTool,    setActiveTool]   = useState<'text' | 'draw' | null>(null)
+  const [activeTool,    setActiveTool]   = useState<'text' | 'draw' | 'edit' | null>(null)
   const [annotColor,    setAnnotColor]   = useState('#E07A5F')
   const [deleteMode,    setDeleteMode]   = useState(false)
   const [pendingPos,    setPendingPos]   = useState<{ x: number; y: number } | null>(null)
   const [pendingText,   setPendingText]  = useState('')
   const [currentStroke, setCurrentStroke] = useState<Array<[number, number]>>([])
   const isDrawingRef = useRef(false)
+  const [editingId,     setEditingId]    = useState<number | null>(null)
+  const [editMessage,   setEditMessage]  = useState('')
+  const [editColor,     setEditColor]    = useState('#E07A5F')
+  const [relocating,    setRelocating]   = useState(false)
 
   // Window size for stable, content-independent page width calculation
   const [winW, setWinW] = useState(window.innerWidth)
@@ -243,6 +247,23 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
     if (res.ok) setAnnotations(prev => prev.filter(a => a.id !== id))
   }
 
+  const patchAnnotation = async (id: number, fields: { message?: string; color?: string; pos_x?: number; pos_y?: number }) => {
+    const res = await adminFetch(`/api/admin/annotations/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(fields),
+    })
+    if (res.ok) {
+      const updated = await res.json()
+      setAnnotations(prev => prev.map(a => a.id === id ? {
+        ...a,
+        message: updated.message ?? a.message,
+        color: updated.color ?? a.color,
+        pos_x: updated.pos_x ?? a.pos_x,
+        pos_y: updated.pos_y ?? a.pos_y,
+      } : a))
+    }
+  }
+
   const saveDrawing = async (stroke: Array<[number, number]>) => {
     const libId = activePdf ? (pdfReads.find(r => r.pdf_filename === activePdf)?.pdf_library_id ?? null) : null
     if (!libId || stroke.length < 2) return
@@ -357,22 +378,28 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
           <div className="absolute top-12 right-2 z-20 bg-white rounded-[12px] shadow-lg p-2 flex flex-col gap-2">
             <div className="flex gap-1.5">
               <button
-                onClick={() => { setActiveTool(t => t === 'text' ? null : 'text'); setDeleteMode(false) }}
+                onClick={() => { setActiveTool(t => t === 'text' ? null : 'text'); setDeleteMode(false); setEditingId(null); setRelocating(false) }}
                 className={`px-3 h-8 rounded-lg text-xs font-extrabold transition-colors
                   ${activeTool === 'text' ? 'bg-peach text-white' : 'bg-cream text-brown-text hover:bg-cream-card'}`}>
                 文字
               </button>
               <button
-                onClick={() => { setActiveTool(t => t === 'draw' ? null : 'draw'); setDeleteMode(false) }}
+                onClick={() => { setActiveTool(t => t === 'draw' ? null : 'draw'); setDeleteMode(false); setEditingId(null); setRelocating(false) }}
                 className={`px-3 h-8 rounded-lg text-xs font-extrabold transition-colors
                   ${activeTool === 'draw' ? 'bg-peach text-white' : 'bg-cream text-brown-text hover:bg-cream-card'}`}>
                 手绘
               </button>
               <button
-                onClick={() => { setDeleteMode(d => !d); setActiveTool(null) }}
+                onClick={() => { setDeleteMode(d => !d); setActiveTool(null); setEditingId(null); setRelocating(false) }}
                 className={`px-3 h-8 rounded-lg text-xs font-extrabold transition-colors
                   ${deleteMode ? 'bg-red-500 text-white' : 'bg-cream text-brown-text hover:bg-cream-card'}`}>
                 删除
+              </button>
+              <button
+                onClick={() => { setActiveTool(t => t === 'edit' ? null : 'edit'); setDeleteMode(false); setEditingId(null); setRelocating(false) }}
+                className={`px-3 h-8 rounded-lg text-xs font-extrabold transition-colors
+                  ${activeTool === 'edit' ? 'bg-peach text-white' : 'bg-cream text-brown-text hover:bg-cream-card'}`}>
+                编辑
               </button>
             </div>
             <div className="flex gap-1.5">
@@ -422,10 +449,18 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
                   {annotMode && (
                     <div className="absolute inset-0 cursor-crosshair touch-none"
                       onClick={e => {
-                        if (activeTool !== 'text' || deleteMode) return
+                        if (deleteMode) return
                         const rect = e.currentTarget.getBoundingClientRect()
-                        setPendingPos({ x: (e.clientX - rect.left) / rect.width, y: (e.clientY - rect.top) / rect.height })
-                        setPendingText('')
+                        const x = (e.clientX - rect.left) / rect.width
+                        const y = (e.clientY - rect.top) / rect.height
+                        if (relocating && editingId != null) {
+                          patchAnnotation(editingId, { pos_x: x, pos_y: y, message: editMessage, color: editColor })
+                          setRelocating(false); setEditingId(null)
+                          return
+                        }
+                        if (activeTool === 'text') {
+                          setPendingPos({ x, y }); setPendingText('')
+                        }
                       }}
                       onPointerDown={e => {
                         if (activeTool !== 'draw' || deleteMode) return
@@ -475,7 +510,16 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
                   {annotations.filter(a => a.pos_x != null && a.pos_y != null && !a.drawing_svg).map(a => (
                     <div key={a.id} className="absolute z-[5] -translate-x-1/2 -translate-y-1/2"
                       style={{ left: `${a.pos_x! * 100}%`, top: `${a.pos_y! * 100}%` }}
-                      onClick={e => { e.stopPropagation(); if (deleteMode) deleteAnnotation(a.id) }}>
+                      onClick={e => {
+                        e.stopPropagation()
+                        if (deleteMode) {
+                          deleteAnnotation(a.id)
+                        } else if (activeTool === 'edit' && !relocating) {
+                          setEditingId(a.id)
+                          setEditMessage(a.message)
+                          setEditColor(a.color)
+                        }
+                      }}>
                       <span className="inline-block text-[11px] font-bold text-white px-2 py-0.5 rounded-full shadow-md whitespace-nowrap"
                         style={{ background: a.color }}>
                         {deleteMode ? '🗑 ' : ''}{a.message}
@@ -518,6 +562,61 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
           下一页 →
         </button>
       </div>
+
+      {/* B.7 重定位 toast */}
+      {relocating && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-peach text-white
+          text-sm font-extrabold px-4 py-2 rounded-full shadow-lg pointer-events-none">
+          📍 点击 PDF 上的新位置来移动批注
+        </div>
+      )}
+
+      {/* B.6 编辑面板 modal */}
+      {editingId != null && !relocating && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
+          onClick={() => setEditingId(null)}>
+          <div className="bg-white rounded-[16px] p-5 w-full max-w-sm shadow-xl"
+            onClick={e => e.stopPropagation()}>
+            <h3 className="font-extrabold text-brown-text text-base mb-3">编辑批注</h3>
+
+            <label className="text-xs font-bold text-brown-mute mb-1 block">文字内容</label>
+            <input type="text" value={editMessage} onChange={e => setEditMessage(e.target.value)}
+              autoFocus
+              className="w-full bg-cream rounded-[10px] px-3 py-2 text-sm text-brown-text
+                border-2 border-transparent focus:border-peach outline-none mb-3" />
+
+            <label className="text-xs font-bold text-brown-mute mb-1 block">颜色</label>
+            <div className="flex gap-2 mb-4">
+              {['#E07A5F', '#C54B38', '#81B29A', '#4A90D9'].map(c => (
+                <button key={c} onClick={() => setEditColor(c)}
+                  className={`w-8 h-8 rounded-full border-2 ${editColor === c ? 'border-brown-text' : 'border-transparent'}`}
+                  style={{ background: c }} />
+              ))}
+            </div>
+
+            <button
+              onClick={() => setRelocating(true)}
+              className="w-full bg-cream text-brown-text font-extrabold py-2 rounded-[10px] mb-2 hover:bg-cream-card">
+              📍 重新定位（点 PDF 新位置）
+            </button>
+
+            <div className="flex gap-2">
+              <button onClick={() => setEditingId(null)}
+                className="flex-1 bg-cream text-brown-text font-extrabold py-2 rounded-[10px] hover:bg-cream-card">
+                取消
+              </button>
+              <button
+                onClick={async () => {
+                  await patchAnnotation(editingId, { message: editMessage, color: editColor })
+                  setEditingId(null)
+                }}
+                className="flex-1 bg-peach text-white font-extrabold py-2 rounded-[10px] hover:opacity-90">
+                保存
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
