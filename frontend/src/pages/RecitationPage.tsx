@@ -6,7 +6,7 @@ interface Child  { id: string; name: string; font_scale: number }
 interface Plan   { id: number; pdf_filename: string; status: string }
 interface Config { window_start: string; window_end: string; min_duration_s: string; max_consecutive_silence_s: string }
 
-const CHUNK_SIZE = 1024 * 1024  // 1MB per chunk
+const CHUNK_SIZE = 256 * 1024  // 256KB per chunk（抖动 5KB/s 下也能 < 90s 完成单块）
 
 function fmtTime(s: number) {
   return `${Math.floor(s/60).toString().padStart(2,'0')}:${Math.floor(s%60).toString().padStart(2,'0')}`
@@ -156,7 +156,7 @@ export default function RecitationPage() {
           fd.append('total_chunks', String(totalChunks))
           fd.append('chunk', chunk, 'chunk.bin')
           let lastErr: Error | null = null
-          for (let retry = 0; retry < 3; retry++) {
+          for (let retry = 0; retry < 5; retry++) {
             try {
               await xhrPost(`/api/recitation/${sid}/upload-chunk`, fd, (loaded, total) => {
                 setUploadProgress(Math.round(((i + (total > 0 ? loaded / total : 0)) / totalChunks) * 100))
@@ -165,10 +165,10 @@ export default function RecitationPage() {
               break
             } catch (e) {
               lastErr = e as Error
-              if (retry < 2) await new Promise(r => setTimeout(r, 1000 * (retry + 1)))
+              if (retry < 4) await new Promise(r => setTimeout(r, 1000 * Math.pow(2, retry)))
             }
           }
-          if (lastErr) throw new Error(`第 ${i + 1}/${totalChunks} 段上传失败（已重试 3 次）：${lastErr.message}`)
+          if (lastErr) throw new Error(`第 ${i + 1}/${totalChunks} 段上传失败（已重试 5 次）：${lastErr.message}`)
         }
         setUploadProgress(99)
         const completeFd = new FormData()

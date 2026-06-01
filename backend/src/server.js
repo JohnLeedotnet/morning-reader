@@ -86,7 +86,7 @@ const uploadChunk = multer({
       cb(null, `chunk_${idx}.bin`)
     },
   }),
-  limits: { fileSize: 5 * 1024 * 1024 },
+  limits: { fileSize: 2 * 1024 * 1024 },  // 单 chunk 上限 2MB（客户端切 256KB，留余量）
 })
 
 // Sprint 2B: PDF 上传专用 multer（写到 PDFS_TMP_DIR，后续算 sha256 + rename 入正式桶）

@@ -8,7 +8,7 @@ import { useReadingRecorder } from '../hooks/useReadingRecorder'
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl
 
-const CHUNK_SIZE = 1024 * 1024  // 1MB per chunk
+const CHUNK_SIZE = 256 * 1024  // 256KB per chunk（抖动 5KB/s 下也能 < 90s 完成单块）
 
 interface PoolEntry { id: number; child_id: string; library_id: number; sha256?: string; pdf_filename: string; sort_order?: number }
 interface Child    { id: string; name: string; age: number; font_scale: number; min_duration_s?: number | null }
@@ -360,7 +360,7 @@ export default function ReadingPage() {
           fd.append('total_chunks', String(totalChunks))
           fd.append('chunk', chunk, 'chunk.bin')
           let lastErr: Error | null = null
-          for (let retry = 0; retry < 3; retry++) {
+          for (let retry = 0; retry < 5; retry++) {
             try {
               await xhrPost(`/api/sessions/${sid}/upload-chunk`, fd, (loaded, total) => {
                 setUploadProgress(Math.round(((i + (total > 0 ? loaded / total : 0)) / totalChunks) * 100))
@@ -369,10 +369,10 @@ export default function ReadingPage() {
               break
             } catch (e) {
               lastErr = e as Error
-              if (retry < 2) await new Promise(r => setTimeout(r, 1000 * (retry + 1)))
+              if (retry < 4) await new Promise(r => setTimeout(r, 1000 * Math.pow(2, retry)))
             }
           }
-          if (lastErr) throw new Error(`第 ${i + 1}/${totalChunks} 段上传失败（已重试 3 次）：${lastErr.message}`)
+          if (lastErr) throw new Error(`第 ${i + 1}/${totalChunks} 段上传失败（已重试 5 次）：${lastErr.message}`)
         }
         setUploadProgress(99)
         const completeFd = new FormData()
