@@ -8,6 +8,8 @@ import { useReadingRecorder } from '../hooks/useReadingRecorder'
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl
 
+const CHUNK_SIZE = 1024 * 1024  // 1MB per chunk
+
 interface PoolEntry { id: number; child_id: string; library_id: number; sha256?: string; pdf_filename: string; sort_order?: number }
 interface Child    { id: string; name: string; age: number; font_scale: number; min_duration_s?: number | null }
 interface Config   {
@@ -102,6 +104,9 @@ export default function ReadingPage() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
   const [error,        setError]        = useState('')
+  const [submitError,  setSubmitError]  = useState('')
+  const blobRef    = useRef<Blob | null>(null)
+  const metricsRef = useRef<Record<string, unknown>>({})
   const [pageAnnotations, setPageAnnotations] = useState<Array<{ id: number; page_number: number; message: string; pos_x: number | null; pos_y: number | null; color: string; drawing_svg?: string | null }>>([])
 
   const [aspectRatio,  setAspectRatio]  = useState(0.707)  // PDF page w/h, default A4 portrait
@@ -314,48 +319,105 @@ export default function ReadingPage() {
     catch (e) { setError(`麦克风错误：${(e as Error).message}`) }
   }
 
-  const handleSubmit = async () => {
-    if (!sessionId || isSubmitting) return
+  const xhrPost = (url: string, fd: FormData, onProgress?: (loaded: number, total: number) => void) =>
+    new Promise<Record<string, unknown>>((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+      xhr.open('POST', url)
+      xhr.timeout = 90000
+      if (onProgress) xhr.upload.onprogress = e => { if (e.lengthComputable) onProgress(e.loaded, e.total) }
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try { resolve(JSON.parse(xhr.responseText)) } catch { reject(new Error('响应解析失败')) }
+        } else reject(new Error(`HTTP ${xhr.status}`))
+      }
+      xhr.onerror = () => reject(new Error('网络中断'))
+      xhr.ontimeout = () => reject(new Error('上传超时'))
+      xhr.send(fd)
+    })
+
+  const uploadRecording = async (blob: Blob, metrics: Record<string, unknown>, sid: number) => {
     setIsSubmitting(true)
     setUploadProgress(0)
+    setSubmitError('')
+    const ext = blob.type.includes('mp4') ? 'mp4' : 'webm'
     try {
-      const { blob, metrics } = await recorder.stopAndGetResult()
-      const ext = blob.type.includes('mp4') ? 'mp4' : 'webm'
-      const fd = new FormData()
-      fd.append('recording', blob, `rec.${ext}`)
-      fd.append('metrics', JSON.stringify(metrics))
-      const data = await new Promise<Record<string, unknown>>((resolve, reject) => {
-        const xhr = new XMLHttpRequest()
-        xhr.open('POST', `/api/sessions/${sessionId}/complete`)
-        xhr.upload.onprogress = e => { if (e.lengthComputable) setUploadProgress(Math.round(e.loaded / e.total * 100)) }
-        xhr.onload = () => {
-          try { resolve(JSON.parse(xhr.responseText)) }
-          catch { reject(new Error('服务器返回格式错误')) }
+      let data: Record<string, unknown>
+      if (blob.size <= CHUNK_SIZE) {
+        const fd = new FormData()
+        fd.append('recording', blob, `rec.${ext}`)
+        fd.append('metrics', JSON.stringify(metrics))
+        data = await xhrPost(`/api/sessions/${sid}/complete`, fd, (loaded, total) => {
+          setUploadProgress(Math.round((loaded / total) * 100))
+        })
+      } else {
+        const totalChunks = Math.ceil(blob.size / CHUNK_SIZE)
+        const uploadId = `${sid}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+        for (let i = 0; i < totalChunks; i++) {
+          const chunk = blob.slice(i * CHUNK_SIZE, Math.min((i + 1) * CHUNK_SIZE, blob.size))
+          const fd = new FormData()
+          fd.append('upload_id', uploadId)
+          fd.append('chunk_index', String(i))
+          fd.append('total_chunks', String(totalChunks))
+          fd.append('chunk', chunk, 'chunk.bin')
+          let lastErr: Error | null = null
+          for (let retry = 0; retry < 3; retry++) {
+            try {
+              await xhrPost(`/api/sessions/${sid}/upload-chunk`, fd, (loaded, total) => {
+                setUploadProgress(Math.round(((i + (total > 0 ? loaded / total : 0)) / totalChunks) * 100))
+              })
+              lastErr = null
+              break
+            } catch (e) {
+              lastErr = e as Error
+              if (retry < 2) await new Promise(r => setTimeout(r, 1000 * (retry + 1)))
+            }
+          }
+          if (lastErr) throw new Error(`第 ${i + 1}/${totalChunks} 段上传失败（已重试 3 次）：${lastErr.message}`)
         }
-        xhr.onerror = () => reject(new Error('网络错误，请重试'))
-        xhr.ontimeout = () => reject(new Error('上传超时，请重试'))
-        xhr.timeout = 120000
-        xhr.send(fd)
-      })
+        setUploadProgress(99)
+        const completeFd = new FormData()
+        completeFd.append('upload_id', uploadId)
+        completeFd.append('total_chunks', String(totalChunks))
+        completeFd.append('ext', ext)
+        completeFd.append('metrics', JSON.stringify(metrics))
+        data = await xhrPost(`/api/sessions/${sid}/complete-chunked`, completeFd)
+      }
       if (data.discarded) {
+        blobRef.current = null
         navigate('/discarded', {
-          state: {
-            reason: data.reason,
-            total_duration_s: data.total_duration_s,
-            silence_ratio: data.silence_ratio,
-            childName: child?.name ?? '',
-            isRecitation: false,
-          },
+          state: { reason: data.reason, total_duration_s: data.total_duration_s, silence_ratio: data.silence_ratio, childName: child?.name ?? '', isRecitation: false },
           replace: true,
         })
         return
       }
+      blobRef.current = null
       navigate(`/result/${data.id}`, { replace: true })
     } catch (e) {
-      setError((e as Error).message)
+      setSubmitError((e as Error).message)
       setUploadProgress(0)
       setIsSubmitting(false)
     }
+  }
+
+  const handleSubmit = async () => {
+    if (!sessionId || isSubmitting) return
+    setIsSubmitting(true)
+    setSubmitError('')
+    try {
+      const { blob, metrics } = await recorder.stopAndGetResult()
+      blobRef.current = blob
+      metricsRef.current = metrics as unknown as Record<string, unknown>
+      uploadRecording(blob, metrics as unknown as Record<string, unknown>, sessionId)
+    } catch (e) {
+      setSubmitError((e as Error).message)
+      setUploadProgress(0)
+      setIsSubmitting(false)
+    }
+  }
+
+  const retryUpload = () => {
+    if (!sessionId || !blobRef.current || isSubmitting) return
+    uploadRecording(blobRef.current, metricsRef.current, sessionId)
   }
 
   // ── Other derived values ──────────────────────────────────────────────────
@@ -575,11 +637,16 @@ export default function ReadingPage() {
           </div>
         </div>
 
-      {isSubmitting && uploadProgress > 0 && uploadProgress < 100 && (
-        <div className="absolute inset-x-0 bottom-0 flex items-center justify-center py-2 bg-black/60 text-white text-sm font-semibold">
-          上传中 {uploadProgress}%
+      {submitError ? (
+        <div className="absolute inset-x-0 bottom-0 flex items-center justify-center gap-3 py-2 bg-black/80 text-white text-sm font-semibold">
+          <span>{submitError}</span>
+          <button onClick={retryUpload} className="bg-peach text-white px-3 py-1 rounded-[8px] text-xs font-extrabold active:scale-95">重试</button>
         </div>
-      )}
+      ) : isSubmitting ? (
+        <div className="absolute inset-x-0 bottom-0 flex items-center justify-center py-2 bg-black/60 text-white text-sm font-semibold">
+          {uploadProgress > 0 && uploadProgress < 100 ? `上传中 ${uploadProgress}%` : '处理中...'}
+        </div>
+      ) : null}
       </div>
     </div>
   )

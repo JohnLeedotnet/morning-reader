@@ -110,7 +110,7 @@ export function useReadingRecorder({ maxConsecutiveSilenceS = 15 } = {}) {
     const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
       ? 'audio/webm;codecs=opus'
       : 'audio/mp4'
-    const recorder = new MediaRecorder(stream, { mimeType })
+    const recorder = new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 24000 })
     mediaRecorderRef.current = recorder
     chunksRef.current = []
     recorder.ondataavailable = e => { if (e.data.size > 0) chunksRef.current.push(e.data) }

@@ -41,6 +41,18 @@ const PDFS_TMP_DIR = path.join(PDFS_DIR, '_tmp');
 if (!fs.existsSync(PDFS_DIR)) fs.mkdirSync(PDFS_DIR, { recursive: true });
 if (!fs.existsSync(PDFS_TMP_DIR)) fs.mkdirSync(PDFS_TMP_DIR, { recursive: true });
 
+const CHUNK_DIR = path.join(RECORDINGS_DIR, '_chunks');
+if (!fs.existsSync(CHUNK_DIR)) fs.mkdirSync(CHUNK_DIR, { recursive: true });
+
+// Sprint 2-Net-Final: 启动时清理 1h 前的孤儿 chunk 目录
+try {
+  const staleMs = Date.now() - 3600 * 1000;
+  for (const d of fs.readdirSync(CHUNK_DIR)) {
+    const full = path.join(CHUNK_DIR, d);
+    if (fs.statSync(full).mtimeMs < staleMs) fs.rmSync(full, { recursive: true, force: true });
+  }
+} catch (_) {}
+
 const AUTO_DISCARD_MIN_DURATION_S = 20
 const AUTO_DISCARD_MAX_SILENCE_RATIO = 0.7
 
@@ -54,6 +66,28 @@ const upload = multer({
   }),
   limits: { fileSize: 200 * 1024 * 1024 },
 });
+
+// Sprint 2-Net-Final: complete-chunked 用（只解析 multipart fields，不处理文件）
+const multerNone = multer().none()
+
+// Sprint 2-Net-Final: 分块上传专用 multer（每块写到 _chunks/<upload_id>/chunk_<index>.bin）
+const uploadChunk = multer({
+  storage: multer.diskStorage({
+    destination: (req, _file, cb) => {
+      const uploadId = req.body.upload_id || req.query.upload_id
+      if (!uploadId || !/^[a-zA-Z0-9_-]{1,64}$/.test(uploadId)) return cb(new Error('invalid upload_id'))
+      const dir = path.join(CHUNK_DIR, uploadId)
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+      cb(null, dir)
+    },
+    filename: (req, _file, cb) => {
+      const idx = parseInt(req.body.chunk_index || req.query.chunk_index || '-1', 10)
+      if (idx < 0) return cb(new Error('invalid chunk_index'))
+      cb(null, `chunk_${idx}.bin`)
+    },
+  }),
+  limits: { fileSize: 5 * 1024 * 1024 },
+})
 
 // Sprint 2B: PDF 上传专用 multer（写到 PDFS_TMP_DIR，后续算 sha256 + rename 入正式桶）
 const uploadPdf = multer({
@@ -501,6 +535,27 @@ app.get('/api/library/mine', (req, res) => {
   }
 })
 
+// GET superadmin 查看所有账号上传列表
+app.get('/api/admin/library/all-uploads', (req, res) => {
+  try {
+    const session = auth.getCurrentSession(db, req.cookies?.auth_token)
+    if (!session) return res.status(401).json({ error: 'not authenticated' })
+    if (session.is_superadmin !== 1) return res.status(403).json({ error: 'forbidden' })
+    const items = db.prepare(`
+      SELECT pl.id, pl.filename, pl.size_bytes, pl.is_private, pl.created_at,
+             a.username AS uploader_username, a.id AS uploader_account_id
+      FROM pdf_library pl
+      JOIN accounts a ON a.id = pl.uploader_account_id
+      WHERE pl.is_builtin = 0
+      ORDER BY pl.created_at DESC
+      LIMIT 1000
+    `).all()
+    res.json({ items })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // PATCH 切换 is_private（仅自家上传或 superadmin）
 app.patch('/api/library/:id/visibility', (req, res) => {
   try {
@@ -629,8 +684,47 @@ app.post('/api/sessions/:id/pdf-opened', (req, res) => {
   }
 });
 
+// Sprint 2-Net-Final: helper — 判定 + 持久化（复用给 /complete 和 /complete-chunked）
+function finishSessionWithRecording(req, res, session, recordingPath, metrics) {
+  const sessionId = session.id
+  const { total_duration_s = 0, silence_count = 0, max_silence_s = 0, total_silence_s = 0, recording_start_ts } = metrics
+  const pdfsOpened = db.prepare('SELECT COUNT(*) as c FROM pdf_reads WHERE session_id = ? AND completed = 1').get(sessionId).c
+  const config = getConfig()
+  const childAcctRow = db.prepare('SELECT account_id FROM children WHERE id = ?').get(session.child_id)
+  const w = auth.getAccountWindow(db, childAcctRow?.account_id)
+  const startDate = new Date(session.start_time)
+  const startHHMM = `${startDate.getHours().toString().padStart(2,'0')}:${startDate.getMinutes().toString().padStart(2,'0')}`
+  const timeInWindow = (startHHMM >= w.window_start && startHHMM < w.window_end) ? 1 : 0
+  const childRow = db.prepare('SELECT min_duration_s FROM children WHERE id = ?').get(session.child_id)
+  const minDur = (childRow?.min_duration_s != null) ? childRow.min_duration_s : parseInt(config.min_duration_s)
+  let status = 'pending_review'
+  if (total_duration_s < minDur) status = 'time_short'
+  else if (!timeInWindow) status = 'out_of_window'
+  else if (max_silence_s > parseInt(config.max_consecutive_silence_s)) status = 'long_pause'
+  else if (total_duration_s > 0 && total_silence_s / total_duration_s > parseFloat(config.max_silence_ratio)) status = 'high_silence'
+  else if (pdfsOpened < session.pdfs_required) status = 'pdf_insufficient'
+  const silenceRatio = total_duration_s > 0 ? total_silence_s / total_duration_s : 1
+  const tooShort = total_duration_s < AUTO_DISCARD_MIN_DURATION_S
+  const tooSilent = silenceRatio > AUTO_DISCARD_MAX_SILENCE_RATIO
+  if (tooShort || tooSilent) {
+    if (recordingPath) { try { fs.unlinkSync(path.join(RECORDINGS_DIR, recordingPath)) } catch(_){} }
+    db.prepare('DELETE FROM pdf_reads WHERE session_id = ?').run(sessionId)
+    db.prepare('DELETE FROM reading_sessions WHERE id = ?').run(sessionId)
+    return res.json({ discarded: true, reason: tooShort ? 'too_short' : 'too_silent', total_duration_s, silence_ratio: Math.round(silenceRatio * 100) / 100 })
+  }
+  const endTime = new Date().toISOString()
+  db.prepare(`
+    UPDATE reading_sessions SET
+      end_time = ?, recording_path = ?, total_duration_s = ?, silence_count = ?,
+      max_silence_s = ?, total_silence_s = ?, pdfs_opened = ?, time_in_window = ?, status = ?,
+      recording_start_time = ?
+    WHERE id = ?
+  `).run(endTime, recordingPath, total_duration_s, silence_count, max_silence_s, total_silence_s, pdfsOpened, timeInWindow, status, recording_start_ts ?? null, sessionId)
+  res.json(db.prepare('SELECT * FROM reading_sessions WHERE id = ?').get(sessionId))
+}
+
 app.post('/api/sessions/:id/complete', upload.single('recording'), (req, res) => {
-  req.setTimeout(120000);
+  req.setTimeout(300000);
   try {
     const sessionId = parseInt(req.params.id);
     const session = db.prepare('SELECT * FROM reading_sessions WHERE id = ?').get(sessionId);
@@ -638,14 +732,6 @@ app.post('/api/sessions/:id/complete', upload.single('recording'), (req, res) =>
       if (req.file) fs.unlink(req.file.path, () => {});
       return res.status(404).json({ error: 'session not found' });
     }
-
-    const metrics = JSON.parse(req.body.metrics ?? '{}');
-    const {
-      total_duration_s = 0, silence_count = 0, max_silence_s = 0, total_silence_s = 0,
-      recording_start_ts,
-    } = metrics;
-
-    // Save recording file
     let recordingPath = null;
     if (req.file) {
       const ext = req.file.originalname?.endsWith('.mp4') ? 'mp4' : 'webm';
@@ -653,68 +739,71 @@ app.post('/api/sessions/:id/complete', upload.single('recording'), (req, res) =>
       fs.renameSync(req.file.path, path.join(RECORDINGS_DIR, filename));
       recordingPath = filename;
     }
-
-    // Count PDFs opened
-    const pdfsOpened = db.prepare(
-      'SELECT COUNT(*) as c FROM pdf_reads WHERE session_id = ? AND completed = 1'
-    ).get(sessionId).c;
-
-    // Time window check (compare local HH:MM)
-    const config = getConfig();
-    const childAcctRow = db.prepare('SELECT account_id FROM children WHERE id = ?').get(session.child_id)
-    const w = auth.getAccountWindow(db, childAcctRow?.account_id)
-    const startDate = new Date(session.start_time);
-    const startHHMM = `${startDate.getHours().toString().padStart(2, '0')}:${startDate.getMinutes().toString().padStart(2, '0')}`;
-    const timeInWindow = (startHHMM >= w.window_start && startHHMM < w.window_end) ? 1 : 0;
-
-    // Status calculation (priority order)
-    const childRow = db.prepare('SELECT min_duration_s FROM children WHERE id = ?').get(session.child_id);
-    const minDur = (childRow?.min_duration_s != null) ? childRow.min_duration_s : parseInt(config.min_duration_s);
-    let status = 'pending_review';
-    if (total_duration_s < minDur) {
-      status = 'time_short';
-    } else if (!timeInWindow) {
-      status = 'out_of_window';
-    } else if (max_silence_s > parseInt(config.max_consecutive_silence_s)) {
-      status = 'long_pause';
-    } else if (total_duration_s > 0 && total_silence_s / total_duration_s > parseFloat(config.max_silence_ratio)) {
-      status = 'high_silence';
-    } else if (pdfsOpened < session.pdfs_required) {
-      status = 'pdf_insufficient';
-    }
-
-    // Auto-discard: too short or too silent
-    const silenceRatioReading = total_duration_s > 0 ? total_silence_s / total_duration_s : 1
-    const tooShortReading   = total_duration_s < AUTO_DISCARD_MIN_DURATION_S
-    const tooSilentReading  = silenceRatioReading > AUTO_DISCARD_MAX_SILENCE_RATIO
-    if (tooShortReading || tooSilentReading) {
-      if (recordingPath) {
-        try { fs.unlinkSync(path.join(RECORDINGS_DIR, recordingPath)) } catch (_) {}
-      }
-      db.prepare('DELETE FROM pdf_reads WHERE session_id = ?').run(sessionId)
-      db.prepare('DELETE FROM reading_sessions WHERE id = ?').run(sessionId)
-      return res.json({
-        discarded: true,
-        reason: tooShortReading ? 'too_short' : 'too_silent',
-        total_duration_s,
-        silence_ratio: Math.round(silenceRatioReading * 100) / 100,
-      })
-    }
-
-    const endTime = new Date().toISOString();
-    db.prepare(`
-      UPDATE reading_sessions SET
-        end_time = ?, recording_path = ?, total_duration_s = ?, silence_count = ?,
-        max_silence_s = ?, total_silence_s = ?, pdfs_opened = ?, time_in_window = ?, status = ?,
-        recording_start_time = ?
-      WHERE id = ?
-    `).run(endTime, recordingPath, total_duration_s, silence_count, max_silence_s, total_silence_s, pdfsOpened, timeInWindow, status, recording_start_ts ?? null, sessionId);
-
-    res.json(db.prepare('SELECT * FROM reading_sessions WHERE id = ?').get(sessionId));
+    const metrics = JSON.parse(req.body.metrics ?? '{}');
+    finishSessionWithRecording(req, res, session, recordingPath, metrics);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
+
+// Sprint 2-Net-Final: 分块上传端点（朗读）
+app.post('/api/sessions/:id/upload-chunk', uploadChunk.single('chunk'), (req, res) => {
+  req.setTimeout(90000)
+  try {
+    const sessionId = parseInt(req.params.id)
+    const session = db.prepare('SELECT id FROM reading_sessions WHERE id = ?').get(sessionId)
+    if (!session) {
+      if (req.file) try { fs.unlinkSync(req.file.path) } catch(_){}
+      return res.status(404).json({ error: 'session not found' })
+    }
+    if (!req.file) return res.status(400).json({ error: 'chunk required' })
+    const chunkIndex = parseInt(req.body.chunk_index, 10)
+    const totalChunks = parseInt(req.body.total_chunks, 10)
+    if (isNaN(chunkIndex) || isNaN(totalChunks) || chunkIndex < 0 || totalChunks <= 0) {
+      return res.status(400).json({ error: 'chunk_index/total_chunks invalid' })
+    }
+    res.json({ ok: true, chunk_index: chunkIndex, total_chunks: totalChunks })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Sprint 2-Net-Final: 分块完成 + 组装（朗读）
+app.post('/api/sessions/:id/complete-chunked', multerNone, (req, res) => {
+  req.setTimeout(120000)
+  try {
+    const sessionId = parseInt(req.params.id)
+    const session = db.prepare('SELECT * FROM reading_sessions WHERE id = ?').get(sessionId)
+    if (!session) return res.status(404).json({ error: 'session not found' })
+    const uploadId = req.body.upload_id
+    const totalChunks = parseInt(req.body.total_chunks, 10)
+    const ext = req.body.ext === 'mp4' ? 'mp4' : 'webm'
+    if (!uploadId || !/^[a-zA-Z0-9_-]{1,64}$/.test(uploadId) || isNaN(totalChunks) || totalChunks <= 0) {
+      return res.status(400).json({ error: 'upload_id/total_chunks invalid' })
+    }
+    let metrics = {}
+    try { metrics = JSON.parse(req.body.metrics ?? '{}') } catch (_) {}
+    const chunkDir = path.join(CHUNK_DIR, uploadId)
+    if (!fs.existsSync(chunkDir)) return res.status(400).json({ error: 'no chunks found' })
+    for (let i = 0; i < totalChunks; i++) {
+      if (!fs.existsSync(path.join(chunkDir, `chunk_${i}.bin`))) return res.status(400).json({ error: `chunk ${i} missing` })
+    }
+    const finalName = `${session.child_id}_${sessionId}_${Date.now()}.${ext}`
+    const finalPath = path.join(RECORDINGS_DIR, finalName)
+    const out = fs.createWriteStream(finalPath)
+    for (let i = 0; i < totalChunks; i++) {
+      out.write(fs.readFileSync(path.join(chunkDir, `chunk_${i}.bin`)))
+    }
+    out.end(() => {
+      for (let i = 0; i < totalChunks; i++) { try { fs.unlinkSync(path.join(chunkDir, `chunk_${i}.bin`)) } catch(_){} }
+      try { fs.rmdirSync(chunkDir) } catch(_){}
+      finishSessionWithRecording(req, res, session, finalName, metrics)
+    })
+    out.on('error', (e) => { try { fs.unlinkSync(finalPath) } catch(_){} res.status(500).json({ error: e.message }) })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
 
 app.get('/api/sessions/:id', (req, res) => {
   try {
@@ -1071,8 +1160,48 @@ app.post('/api/recitation/start', (req, res) => {
   }
 })
 
+// Sprint 2-Net-Final: helper — 判定 + 持久化（复用给背诵 /complete 和 /complete-chunked）
+function finishRecitationWithRecording(req, res, session, recordingPath, metrics) {
+  const sessionId = session.id
+  const { total_duration_s = 0, silence_count = 0, max_silence_s = 0, total_silence_s = 0, recording_start_ts } = metrics
+  const config = getConfig()
+  const recChildAcctRow = db.prepare('SELECT account_id FROM children WHERE id = ?').get(session.child_id)
+  const wRec = auth.getAccountWindow(db, recChildAcctRow?.account_id)
+  const startDate = new Date(session.start_time)
+  const startHHMM = `${startDate.getHours().toString().padStart(2,'0')}:${startDate.getMinutes().toString().padStart(2,'0')}`
+  const timeInWindow = (startHHMM >= wRec.window_start && startHHMM < wRec.window_end) ? 1 : 0
+  const childRowRec = db.prepare('SELECT min_duration_s FROM children WHERE id = ?').get(session.child_id)
+  const minDurRec = (childRowRec?.min_duration_s != null) ? childRowRec.min_duration_s : parseInt(config.min_duration_s)
+  const halfMin = Math.floor(minDurRec / 2)
+  let status = 'pending_review'
+  if (total_duration_s < halfMin) status = 'time_short'
+  else if (max_silence_s > parseInt(config.max_consecutive_silence_s)) status = 'long_pause'
+  else if (total_duration_s > 0 && total_silence_s / total_duration_s > parseFloat(config.max_silence_ratio)) status = 'high_silence'
+  const silenceRatio = total_duration_s > 0 ? total_silence_s / total_duration_s : 1
+  const tooShort = total_duration_s < AUTO_DISCARD_MIN_DURATION_S
+  const tooSilent = silenceRatio > AUTO_DISCARD_MAX_SILENCE_RATIO
+  if (tooShort || tooSilent) {
+    if (recordingPath) { try { fs.unlinkSync(path.join(RECORDINGS_DIR, recordingPath)) } catch(_){} }
+    db.prepare('DELETE FROM pdf_reads WHERE session_id = ?').run(sessionId)
+    db.prepare('DELETE FROM reading_sessions WHERE id = ?').run(sessionId)
+    return res.json({ discarded: true, reason: tooShort ? 'too_short' : 'too_silent', total_duration_s, silence_ratio: Math.round(silenceRatio * 100) / 100 })
+  }
+  const endTime = new Date().toISOString()
+  db.prepare(`
+    UPDATE reading_sessions SET
+      end_time = ?, recording_path = ?, total_duration_s = ?, silence_count = ?,
+      max_silence_s = ?, total_silence_s = ?, time_in_window = ?, status = ?,
+      recording_start_time = ?
+    WHERE id = ?
+  `).run(endTime, recordingPath, total_duration_s, silence_count, max_silence_s, total_silence_s, timeInWindow, status, recording_start_ts ?? null, sessionId)
+  if (session.plan_id) {
+    db.prepare("UPDATE recitation_plans SET status = 'submitted' WHERE id = ? AND status IN ('scheduled', 'retry')").run(session.plan_id)
+  }
+  res.json(db.prepare('SELECT * FROM reading_sessions WHERE id = ?').get(sessionId))
+}
+
 app.post('/api/recitation/:id/complete', upload.single('recording'), (req, res) => {
-  req.setTimeout(120000)
+  req.setTimeout(300000)
   try {
     const sessionId = parseInt(req.params.id)
     const session = db.prepare('SELECT * FROM reading_sessions WHERE id = ?').get(sessionId)
@@ -1080,13 +1209,6 @@ app.post('/api/recitation/:id/complete', upload.single('recording'), (req, res) 
       if (req.file) fs.unlink(req.file.path, () => {})
       return res.status(404).json({ error: 'session not found' })
     }
-
-    const metrics = JSON.parse(req.body.metrics ?? '{}')
-    const {
-      total_duration_s = 0, silence_count = 0, max_silence_s = 0, total_silence_s = 0,
-      recording_start_ts,
-    } = metrics
-
     let recordingPath = null
     if (req.file) {
       const ext = req.file.originalname?.endsWith('.mp4') ? 'mp4' : 'webm'
@@ -1094,60 +1216,67 @@ app.post('/api/recitation/:id/complete', upload.single('recording'), (req, res) 
       fs.renameSync(req.file.path, path.join(RECORDINGS_DIR, filename))
       recordingPath = filename
     }
+    const metrics = JSON.parse(req.body.metrics ?? '{}')
+    finishRecitationWithRecording(req, res, session, recordingPath, metrics)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
 
-    const config = getConfig()
-    const recChildAcctRow = db.prepare('SELECT account_id FROM children WHERE id = ?').get(session.child_id)
-    const wRec = auth.getAccountWindow(db, recChildAcctRow?.account_id)
-    const startDate = new Date(session.start_time)
-    const startHHMM = `${startDate.getHours().toString().padStart(2, '0')}:${startDate.getMinutes().toString().padStart(2, '0')}`
-    const timeInWindow = (startHHMM >= wRec.window_start && startHHMM < wRec.window_end) ? 1 : 0
-
-    const childRowRec = db.prepare('SELECT min_duration_s FROM children WHERE id = ?').get(session.child_id)
-    const minDurRec = (childRowRec?.min_duration_s != null) ? childRowRec.min_duration_s : parseInt(config.min_duration_s)
-    const halfMin = Math.floor(minDurRec / 2)
-    let status = 'pending_review'
-    if (total_duration_s < halfMin) {
-      status = 'time_short'
-    } else if (max_silence_s > parseInt(config.max_consecutive_silence_s)) {
-      status = 'long_pause'
-    } else if (total_duration_s > 0 && total_silence_s / total_duration_s > parseFloat(config.max_silence_ratio)) {
-      status = 'high_silence'
+// Sprint 2-Net-Final: 分块上传端点（背诵）
+app.post('/api/recitation/:id/upload-chunk', uploadChunk.single('chunk'), (req, res) => {
+  req.setTimeout(90000)
+  try {
+    const sessionId = parseInt(req.params.id)
+    const session = db.prepare('SELECT id FROM reading_sessions WHERE id = ?').get(sessionId)
+    if (!session) {
+      if (req.file) try { fs.unlinkSync(req.file.path) } catch(_){}
+      return res.status(404).json({ error: 'session not found' })
     }
-
-    // Auto-discard: too short or too silent
-    const silenceRatioRecitation = total_duration_s > 0 ? total_silence_s / total_duration_s : 1
-    const tooShortRecitation  = total_duration_s < AUTO_DISCARD_MIN_DURATION_S
-    const tooSilentRecitation = silenceRatioRecitation > AUTO_DISCARD_MAX_SILENCE_RATIO
-    if (tooShortRecitation || tooSilentRecitation) {
-      if (recordingPath) {
-        try { fs.unlinkSync(path.join(RECORDINGS_DIR, recordingPath)) } catch (_) {}
-      }
-      db.prepare('DELETE FROM pdf_reads WHERE session_id = ?').run(sessionId)
-      db.prepare('DELETE FROM reading_sessions WHERE id = ?').run(sessionId)
-      return res.json({
-        discarded: true,
-        reason: tooShortRecitation ? 'too_short' : 'too_silent',
-        total_duration_s,
-        silence_ratio: Math.round(silenceRatioRecitation * 100) / 100,
-      })
+    if (!req.file) return res.status(400).json({ error: 'chunk required' })
+    const chunkIndex = parseInt(req.body.chunk_index, 10)
+    const totalChunks = parseInt(req.body.total_chunks, 10)
+    if (isNaN(chunkIndex) || isNaN(totalChunks) || chunkIndex < 0 || totalChunks <= 0) {
+      return res.status(400).json({ error: 'chunk_index/total_chunks invalid' })
     }
+    res.json({ ok: true, chunk_index: chunkIndex, total_chunks: totalChunks })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
 
-    const endTime = new Date().toISOString()
-    db.prepare(`
-      UPDATE reading_sessions SET
-        end_time = ?, recording_path = ?, total_duration_s = ?, silence_count = ?,
-        max_silence_s = ?, total_silence_s = ?, time_in_window = ?, status = ?,
-        recording_start_time = ?
-      WHERE id = ?
-    `).run(endTime, recordingPath, total_duration_s, silence_count, max_silence_s, total_silence_s, timeInWindow, status, recording_start_ts ?? null, sessionId)
-
-    if (session.plan_id) {
-      db.prepare(
-        "UPDATE recitation_plans SET status = 'submitted' WHERE id = ? AND status IN ('scheduled', 'retry')"
-      ).run(session.plan_id)
+// Sprint 2-Net-Final: 分块完成 + 组装（背诵）
+app.post('/api/recitation/:id/complete-chunked', multerNone, (req, res) => {
+  req.setTimeout(120000)
+  try {
+    const sessionId = parseInt(req.params.id)
+    const session = db.prepare('SELECT * FROM reading_sessions WHERE id = ?').get(sessionId)
+    if (!session) return res.status(404).json({ error: 'session not found' })
+    const uploadId = req.body.upload_id
+    const totalChunks = parseInt(req.body.total_chunks, 10)
+    const ext = req.body.ext === 'mp4' ? 'mp4' : 'webm'
+    if (!uploadId || !/^[a-zA-Z0-9_-]{1,64}$/.test(uploadId) || isNaN(totalChunks) || totalChunks <= 0) {
+      return res.status(400).json({ error: 'upload_id/total_chunks invalid' })
     }
-
-    res.json(db.prepare('SELECT * FROM reading_sessions WHERE id = ?').get(sessionId))
+    let metrics = {}
+    try { metrics = JSON.parse(req.body.metrics ?? '{}') } catch (_) {}
+    const chunkDir = path.join(CHUNK_DIR, uploadId)
+    if (!fs.existsSync(chunkDir)) return res.status(400).json({ error: 'no chunks found' })
+    for (let i = 0; i < totalChunks; i++) {
+      if (!fs.existsSync(path.join(chunkDir, `chunk_${i}.bin`))) return res.status(400).json({ error: `chunk ${i} missing` })
+    }
+    const finalName = `${session.child_id}_${sessionId}_${Date.now()}.${ext}`
+    const finalPath = path.join(RECORDINGS_DIR, finalName)
+    const out = fs.createWriteStream(finalPath)
+    for (let i = 0; i < totalChunks; i++) {
+      out.write(fs.readFileSync(path.join(chunkDir, `chunk_${i}.bin`)))
+    }
+    out.end(() => {
+      for (let i = 0; i < totalChunks; i++) { try { fs.unlinkSync(path.join(chunkDir, `chunk_${i}.bin`)) } catch(_){} }
+      try { fs.rmdirSync(chunkDir) } catch(_){}
+      finishRecitationWithRecording(req, res, session, finalName, metrics)
+    })
+    out.on('error', (e) => { try { fs.unlinkSync(finalPath) } catch(_){} res.status(500).json({ error: e.message }) })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
