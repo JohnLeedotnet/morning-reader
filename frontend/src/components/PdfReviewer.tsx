@@ -27,6 +27,17 @@ const IconTrash = ({ className = 'w-4 h-4' }: { className?: string }) => (
   </svg>
 )
 
+type DragState = {
+  id: number
+  type: 'text' | 'drawing'
+  startClientX: number
+  startClientY: number
+  movedPx: number
+  offsetNormX: number
+  offsetNormY: number
+  originalSvgPoints?: Array<[number, number]>
+}
+
 interface PdfRead {
   pdf_filename: string
   pdf_library_id?: number | null
@@ -70,9 +81,12 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
   const [numPages,    setNumPages]   = useState(0)
   const [autoFollow,  setAutoFollow] = useState(true)
   const [manualOverride, setManualOverride] = useState(false)
-  const [annotations,   setAnnotations]  = useState<Array<{ id: number; message: string; pos_x: number | null; pos_y: number | null; color: string; drawing_svg?: string | null; page_number: number }>>([])
+  const [annotations, setAnnotations] = useState<Array<{
+    id: number; message: string; pos_x: number | null; pos_y: number | null
+    color: string; drawing_svg?: string | null; page_number: number; font_scale?: number
+  }>>([])
   const [activeTool,    setActiveTool]   = useState<'text' | 'draw' | null>(null)
-  const annotColor = '#E07A5F'
+  const [annotColor,    setAnnotColor]   = useState('#E07A5F')
   const [deleteMode,    setDeleteMode]   = useState(false)
   const [pendingPos,    setPendingPos]   = useState<{ x: number; y: number } | null>(null)
   const [pendingText,   setPendingText]  = useState('')
@@ -82,10 +96,17 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
   const [editMessage,   setEditMessage]  = useState('')
   const [editColor,     setEditColor]    = useState('#E07A5F')
 
-  // Drag state (Task C)
-  const draggingRef = useRef<{ id: number; startX: number; startY: number; movedPx: number } | null>(null)
+  // Drag state (window-level)
+  const draggingRef = useRef<DragState | null>(null)
+  const dragVisualRef = useRef<{
+    id: number; type: 'text' | 'drawing'; x: number; y: number
+    svgPoints?: Array<[number, number]>
+  } | null>(null)
   const [, forceRerender] = useState(0)
-  const dragVisualRef = useRef<{ id: number; x: number; y: number } | null>(null)
+
+  // Resize (font_scale) state
+  const resizingRef = useRef<{ id: number; startClientX: number; startClientY: number; startScale: number } | null>(null)
+  const resizeVisualRef = useRef<{ id: number; scale: number } | null>(null)
 
   // Window size for stable, content-independent page width calculation
   const [winW, setWinW] = useState(window.innerWidth)
@@ -234,7 +255,7 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
     return () => window.removeEventListener('keydown', h)
   }, [currentPage, numPages, showDual])
 
-  // Load annotations for whole library once; filter by page in render (Task 0)
+  // Load annotations for whole library once; filter by page in render
   useEffect(() => {
     const libId = activePdf
       ? (pdfReads.find(r => r.pdf_filename === activePdf)?.pdf_library_id ?? null)
@@ -245,6 +266,29 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
       .then(setAnnotations)
       .catch(() => setAnnotations([]))
   }, [activePdf, pdfReads])
+
+  // patchAnnotation must be defined BEFORE the window-level drag useEffect
+  const patchAnnotation = async (id: number, fields: {
+    message?: string; color?: string; pos_x?: number; pos_y?: number
+    drawing_svg?: string; font_scale?: number
+  }) => {
+    const res = await adminFetch(`/api/admin/annotations/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(fields),
+    })
+    if (res.ok) {
+      const updated = await res.json()
+      setAnnotations(prev => prev.map(a => a.id === id ? {
+        ...a,
+        message: updated.message ?? a.message,
+        color: updated.color ?? a.color,
+        pos_x: updated.pos_x ?? a.pos_x,
+        pos_y: updated.pos_y ?? a.pos_y,
+        drawing_svg: updated.drawing_svg !== undefined ? updated.drawing_svg : a.drawing_svg,
+        font_scale: updated.font_scale ?? a.font_scale,
+      } : a))
+    }
+  }
 
   const saveAnnotation = async () => {
     const libId = activePdf
@@ -260,7 +304,10 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
     })
     if (res.ok) {
       const c = await res.json()
-      setAnnotations(prev => [...prev, { id: c.id, message: c.message, pos_x: c.pos_x, pos_y: c.pos_y, color: c.color, drawing_svg: null, page_number: c.page_number }])
+      setAnnotations(prev => [...prev, {
+        id: c.id, message: c.message, pos_x: c.pos_x, pos_y: c.pos_y,
+        color: c.color, drawing_svg: null, page_number: c.page_number, font_scale: c.font_scale ?? 1.0,
+      }])
       setPendingPos(null); setPendingText('')
     }
   }
@@ -268,23 +315,6 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
   const deleteAnnotation = async (id: number) => {
     const res = await adminFetch(`/api/admin/annotations/${id}`, { method: 'DELETE' })
     if (res.ok) setAnnotations(prev => prev.filter(a => a.id !== id))
-  }
-
-  const patchAnnotation = async (id: number, fields: { message?: string; color?: string; pos_x?: number; pos_y?: number }) => {
-    const res = await adminFetch(`/api/admin/annotations/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify(fields),
-    })
-    if (res.ok) {
-      const updated = await res.json()
-      setAnnotations(prev => prev.map(a => a.id === id ? {
-        ...a,
-        message: updated.message ?? a.message,
-        color: updated.color ?? a.color,
-        pos_x: updated.pos_x ?? a.pos_x,
-        pos_y: updated.pos_y ?? a.pos_y,
-      } : a))
-    }
   }
 
   const saveDrawing = async (stroke: Array<[number, number]>) => {
@@ -300,9 +330,97 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
     })
     if (res.ok) {
       const c = await res.json()
-      setAnnotations(prev => [...prev, { id: c.id, message: c.message, pos_x: c.pos_x, pos_y: c.pos_y, color: c.color, drawing_svg: c.drawing_svg, page_number: c.page_number }])
+      setAnnotations(prev => [...prev, {
+        id: c.id, message: c.message, pos_x: c.pos_x, pos_y: c.pos_y,
+        color: c.color, drawing_svg: c.drawing_svg, page_number: c.page_number,
+      }])
     }
   }
+
+  // Window-level pointer listeners for drag (text+drawing) and resize (font_scale)
+  useEffect(() => {
+    const findPageContainer = () =>
+      containerRef.current?.querySelector('.relative.inline-block') as HTMLElement | null
+    const normalize = (clientX: number, clientY: number) => {
+      const c = findPageContainer()
+      if (!c) return null
+      const r = c.getBoundingClientRect()
+      return { x: (clientX - r.left) / r.width, y: (clientY - r.top) / r.height }
+    }
+    const handleMove = (e: PointerEvent) => {
+      const resize = resizingRef.current
+      if (resize) {
+        const dx = e.clientX - resize.startClientX
+        const dy = e.clientY - resize.startClientY
+        const delta = (dx + dy) / 200
+        const newScale = Math.max(0.5, Math.min(2.0, resize.startScale + delta))
+        resizeVisualRef.current = { id: resize.id, scale: newScale }
+        forceRerender(n => n + 1)
+        return
+      }
+      const drag = draggingRef.current
+      if (!drag) return
+      const dx = e.clientX - drag.startClientX
+      const dy = e.clientY - drag.startClientY
+      drag.movedPx = Math.max(drag.movedPx, Math.hypot(dx, dy))
+      if (drag.movedPx <= 5) return
+      const pos = normalize(e.clientX, e.clientY)
+      if (!pos) return
+      if (drag.type === 'text') {
+        dragVisualRef.current = {
+          id: drag.id, type: 'text',
+          x: pos.x - drag.offsetNormX,
+          y: pos.y - drag.offsetNormY,
+        }
+      } else if (drag.type === 'drawing' && drag.originalSvgPoints) {
+        const targetFirstX = pos.x - drag.offsetNormX
+        const targetFirstY = pos.y - drag.offsetNormY
+        const offX = targetFirstX - drag.originalSvgPoints[0][0]
+        const offY = targetFirstY - drag.originalSvgPoints[0][1]
+        const newPoints = drag.originalSvgPoints.map(p => [p[0] + offX, p[1] + offY] as [number, number])
+        dragVisualRef.current = {
+          id: drag.id, type: 'drawing',
+          x: newPoints[0][0], y: newPoints[0][1],
+          svgPoints: newPoints,
+        }
+      }
+      forceRerender(n => n + 1)
+    }
+    const handleUp = () => {
+      const resize = resizingRef.current
+      const rv = resizeVisualRef.current
+      if (resize && rv && Math.abs(rv.scale - resize.startScale) > 0.05) {
+        patchAnnotation(resize.id, { font_scale: rv.scale })
+      }
+      resizingRef.current = null
+      resizeVisualRef.current = null
+
+      const drag = draggingRef.current
+      const visual = dragVisualRef.current
+      if (drag && visual && drag.movedPx > 5) {
+        if (drag.type === 'text') {
+          patchAnnotation(drag.id, { pos_x: visual.x, pos_y: visual.y })
+        } else if (drag.type === 'drawing' && visual.svgPoints) {
+          patchAnnotation(drag.id, {
+            drawing_svg: JSON.stringify(visual.svgPoints),
+            pos_x: visual.svgPoints[0][0],
+            pos_y: visual.svgPoints[0][1],
+          })
+        }
+      }
+      draggingRef.current = null
+      dragVisualRef.current = null
+      forceRerender(n => n + 1)
+    }
+    window.addEventListener('pointermove', handleMove)
+    window.addEventListener('pointerup', handleUp)
+    window.addEventListener('pointercancel', handleUp)
+    return () => {
+      window.removeEventListener('pointermove', handleMove)
+      window.removeEventListener('pointerup', handleUp)
+      window.removeEventListener('pointercancel', handleUp)
+    }
+  }, [])
 
   // Touch swipe navigation
   const touchStartX = useRef(0)
@@ -409,6 +527,16 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
             </button>
           </div>
         )}
+        {/* 色卡 sub-toolbar（仅文字工具激活时）*/}
+        {activeLibId && activeTool === 'text' && (
+          <div className="absolute top-12 right-2 z-20 bg-white/95 rounded-[10px] shadow-md p-1 flex gap-1">
+            {(['#E07A5F', '#C54B38', '#81B29A', '#4A90D9'] as const).map(c => (
+              <button key={c} onClick={() => setAnnotColor(c)} aria-label={`颜色 ${c}`}
+                className={`w-6 h-6 rounded-full border-2 ${annotColor === c ? 'border-brown-text' : 'border-transparent'}`}
+                style={{ background: c }} />
+            ))}
+          </div>
+        )}
 
         <div ref={containerRef}
              className="bg-cream-pdf rounded-[14px] overflow-hidden flex items-center justify-center p-2"
@@ -494,13 +622,23 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
                   </div>
                   {/* 已有定位气泡（文字批注，filter by currentPage）*/}
                   {annotations.filter(a => a.page_number === currentPage && a.pos_x != null && a.pos_y != null && !a.drawing_svg).map(a => {
-                    const visual = dragVisualRef.current?.id === a.id ? dragVisualRef.current : null
-                    const displayX = visual ? visual.x : a.pos_x!
-                    const displayY = visual ? visual.y : a.pos_y!
+                    const dragV = dragVisualRef.current?.id === a.id && dragVisualRef.current.type === 'text'
+                      ? dragVisualRef.current : null
+                    const displayX = dragV ? dragV.x : a.pos_x!
+                    const displayY = dragV ? dragV.y : a.pos_y!
+                    const vScale = resizeVisualRef.current?.id === a.id
+                      ? resizeVisualRef.current.scale : (a.font_scale ?? 1.0)
                     return (
                       <div key={a.id}
-                        className="absolute z-[5] -translate-x-1/2 -translate-y-1/2 pointer-events-auto select-none"
-                        style={{ left: `${displayX * 100}%`, top: `${displayY * 100}%`, touchAction: 'none', cursor: (!deleteMode && !activeTool) ? 'grab' : 'pointer' }}
+                        className="absolute z-[5] pointer-events-auto select-none"
+                        style={{
+                          left: `${displayX * 100}%`,
+                          top: `${displayY * 100}%`,
+                          transform: `translate(-50%, -50%) scale(${vScale})`,
+                          transformOrigin: 'center',
+                          touchAction: 'none',
+                          cursor: (!deleteMode && !activeTool) ? 'grab' : 'pointer',
+                        }}
                         onClick={e => {
                           e.stopPropagation()
                           if (deleteMode) deleteAnnotation(a.id)
@@ -515,59 +653,87 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
                         onPointerDown={e => {
                           if (deleteMode || activeTool) return
                           e.stopPropagation()
-                          ;(e.target as Element).setPointerCapture?.(e.pointerId)
-                          draggingRef.current = { id: a.id, startX: e.clientX, startY: e.clientY, movedPx: 0 }
-                        }}
-                        onPointerMove={e => {
-                          const drag = draggingRef.current
-                          if (!drag || drag.id !== a.id) return
-                          const dx = e.clientX - drag.startX
-                          const dy = e.clientY - drag.startY
-                          drag.movedPx = Math.max(drag.movedPx, Math.hypot(dx, dy))
-                          if (drag.movedPx > 5) {
-                            const container = (e.currentTarget as HTMLElement).parentElement
-                            if (container) {
-                              const rect = container.getBoundingClientRect()
-                              dragVisualRef.current = {
-                                id: a.id,
-                                x: (e.clientX - rect.left) / rect.width,
-                                y: (e.clientY - rect.top) / rect.height,
-                              }
-                              forceRerender(n => n + 1)
-                            }
+                          const c = containerRef.current?.querySelector('.relative.inline-block') as HTMLElement | null
+                          if (!c) return
+                          const r = c.getBoundingClientRect()
+                          const normX = (e.clientX - r.left) / r.width
+                          const normY = (e.clientY - r.top) / r.height
+                          draggingRef.current = {
+                            id: a.id, type: 'text',
+                            startClientX: e.clientX, startClientY: e.clientY, movedPx: 0,
+                            offsetNormX: normX - a.pos_x!,
+                            offsetNormY: normY - a.pos_y!,
                           }
-                        }}
-                        onPointerUp={e => {
-                          const drag = draggingRef.current
-                          if (!drag || drag.id !== a.id) { draggingRef.current = null; return }
-                          if (drag.movedPx > 5 && dragVisualRef.current) {
-                            const { x, y } = dragVisualRef.current
-                            patchAnnotation(a.id, { pos_x: x, pos_y: y })
-                          }
-                          draggingRef.current = null
-                          dragVisualRef.current = null
-                          e.stopPropagation()
                         }}>
                         <span className="inline-block text-[11px] font-bold text-white px-2 py-0.5 rounded-full shadow-md whitespace-nowrap"
-                          style={{ background: a.color }}>
+                          style={{ background: a.color, position: 'relative' }}>
                           {deleteMode ? '🗑 ' : ''}{a.message}
+                          {!deleteMode && !activeTool && (
+                            <span
+                              className="absolute -right-1.5 -bottom-1.5 w-3 h-3 bg-white border-2 border-peach rounded-full"
+                              style={{ cursor: 'nwse-resize', pointerEvents: 'auto' }}
+                              onPointerDown={e => {
+                                e.stopPropagation()
+                                resizingRef.current = {
+                                  id: a.id,
+                                  startClientX: e.clientX, startClientY: e.clientY,
+                                  startScale: a.font_scale ?? 1.0,
+                                }
+                              }}
+                            />
+                          )}
                         </span>
                       </div>
                     )
                   })}
-                  {/* 已有手绘批注（SVG，filter by currentPage）*/}
+                  {/* 已有手绘批注（SVG，filter by currentPage，透明厚 hit area + 拖动）*/}
                   {annotations.filter(a => a.page_number === currentPage && a.drawing_svg).map(a => {
                     let pts: Array<[number, number]> = []
                     try { pts = JSON.parse(a.drawing_svg!) } catch (_) { return null }
                     if (pts.length < 2) return null
+                    const dragVisual = dragVisualRef.current?.id === a.id && dragVisualRef.current.svgPoints
+                      ? dragVisualRef.current.svgPoints : pts
+                    const pointsStr = dragVisual.map(p => `${p[0]},${p[1]}`).join(' ')
+                    const canDrag = !activeTool && !deleteMode
                     return (
-                      <svg key={a.id} className={`absolute inset-0 w-full h-full ${deleteMode ? 'cursor-pointer pointer-events-auto' : 'pointer-events-none'}`}
-                        viewBox="0 0 1 1" preserveAspectRatio="none"
-                        onClick={deleteMode ? (e => { e.stopPropagation(); deleteAnnotation(a.id) }) : undefined}>
-                        <polyline points={pts.map(p => `${p[0]},${p[1]}`).join(' ')}
+                      <svg key={a.id}
+                        className="absolute inset-0 w-full h-full z-10 pointer-events-none"
+                        viewBox="0 0 1 1" preserveAspectRatio="none">
+                        {/* 透明厚命中区：手指按线附近 10px 都能抓到 */}
+                        <polyline
+                          points={pointsStr}
+                          fill="none" stroke="transparent" strokeWidth="20"
+                          vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round"
+                          style={{
+                            pointerEvents: 'stroke',
+                            cursor: canDrag ? 'grab' : (deleteMode ? 'pointer' : 'default'),
+                          }}
+                          onClick={e => { e.stopPropagation(); if (deleteMode) deleteAnnotation(a.id) }}
+                          onPointerDown={e => {
+                            if (!canDrag) return
+                            e.stopPropagation()
+                            const c = containerRef.current?.querySelector('.relative.inline-block') as HTMLElement | null
+                            if (!c) return
+                            const r = c.getBoundingClientRect()
+                            const normX = (e.clientX - r.left) / r.width
+                            const normY = (e.clientY - r.top) / r.height
+                            draggingRef.current = {
+                              id: a.id, type: 'drawing',
+                              startClientX: e.clientX, startClientY: e.clientY, movedPx: 0,
+                              offsetNormX: normX - pts[0][0],
+                              offsetNormY: normY - pts[0][1],
+                              originalSvgPoints: pts,
+                            }
+                          }}
+                        />
+                        {/* 可见的细 stroke */}
+                        <polyline
+                          points={pointsStr}
                           fill="none" stroke={a.color} strokeWidth={deleteMode ? '4' : '2.5'}
                           vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round"
-                          opacity={deleteMode ? 0.6 : 1} />
+                          opacity={deleteMode ? 0.6 : 1}
+                          style={{ pointerEvents: 'none' }}
+                        />
                       </svg>
                     )
                   })}
