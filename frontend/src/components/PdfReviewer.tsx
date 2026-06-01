@@ -7,6 +7,26 @@ import { adminFetch } from '../lib/adminFetch'
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl
 
+const IconT = ({ className = 'w-4 h-4' }: { className?: string }) => (
+  <svg viewBox="0 0 16 16" className={className} fill="currentColor">
+    <path d="M2 2 H14 V5 H9.5 V14 H6.5 V5 H2 Z" />
+  </svg>
+)
+const IconPencil = ({ className = 'w-4 h-4' }: { className?: string }) => (
+  <svg viewBox="0 0 16 16" className={className} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M11.5 2 L14 4.5 L5.5 13 L2 13.5 L2.5 10 Z" />
+    <path d="M10 3.5 L12.5 6" />
+  </svg>
+)
+const IconTrash = ({ className = 'w-4 h-4' }: { className?: string }) => (
+  <svg viewBox="0 0 16 16" className={className} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 5 L13 5 L12 14 H4 Z" />
+    <path d="M6 5 V3 H10 V5" />
+    <path d="M6.5 8 V12 M9.5 8 V12" />
+    <path d="M2 5 H14" />
+  </svg>
+)
+
 interface PdfRead {
   pdf_filename: string
   pdf_library_id?: number | null
@@ -50,10 +70,9 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
   const [numPages,    setNumPages]   = useState(0)
   const [autoFollow,  setAutoFollow] = useState(true)
   const [manualOverride, setManualOverride] = useState(false)
-  const [annotations,   setAnnotations]  = useState<Array<{ id: number; message: string; pos_x: number | null; pos_y: number | null; color: string; drawing_svg?: string | null }>>([])
-  const [annotMode,     setAnnotMode]    = useState(false)
-  const [activeTool,    setActiveTool]   = useState<'text' | 'draw' | 'edit' | null>(null)
-  const [annotColor,    setAnnotColor]   = useState('#E07A5F')
+  const [annotations,   setAnnotations]  = useState<Array<{ id: number; message: string; pos_x: number | null; pos_y: number | null; color: string; drawing_svg?: string | null; page_number: number }>>([])
+  const [activeTool,    setActiveTool]   = useState<'text' | 'draw' | null>(null)
+  const annotColor = '#E07A5F'
   const [deleteMode,    setDeleteMode]   = useState(false)
   const [pendingPos,    setPendingPos]   = useState<{ x: number; y: number } | null>(null)
   const [pendingText,   setPendingText]  = useState('')
@@ -62,7 +81,11 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
   const [editingId,     setEditingId]    = useState<number | null>(null)
   const [editMessage,   setEditMessage]  = useState('')
   const [editColor,     setEditColor]    = useState('#E07A5F')
-  const [relocating,    setRelocating]   = useState(false)
+
+  // Drag state (Task C)
+  const draggingRef = useRef<{ id: number; startX: number; startY: number; movedPx: number } | null>(null)
+  const [, forceRerender] = useState(0)
+  const dragVisualRef = useRef<{ id: number; x: number; y: number } | null>(null)
 
   // Window size for stable, content-independent page width calculation
   const [winW, setWinW] = useState(window.innerWidth)
@@ -211,17 +234,17 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
     return () => window.removeEventListener('keydown', h)
   }, [currentPage, numPages, showDual])
 
-  // Load annotations for current page (Sprint 3A)
+  // Load annotations for whole library once; filter by page in render (Task 0)
   useEffect(() => {
     const libId = activePdf
       ? (pdfReads.find(r => r.pdf_filename === activePdf)?.pdf_library_id ?? null)
       : null
     if (!libId) { setAnnotations([]); return }
-    adminFetch(`/api/admin/annotations?library_id=${libId}&page=${currentPage}`)
+    adminFetch(`/api/admin/annotations?library_id=${libId}`)
       .then(r => r.ok ? r.json() : [])
       .then(setAnnotations)
       .catch(() => setAnnotations([]))
-  }, [activePdf, pdfReads, currentPage])
+  }, [activePdf, pdfReads])
 
   const saveAnnotation = async () => {
     const libId = activePdf
@@ -237,7 +260,7 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
     })
     if (res.ok) {
       const c = await res.json()
-      setAnnotations(prev => [...prev, { id: c.id, message: c.message, pos_x: c.pos_x, pos_y: c.pos_y, color: c.color, drawing_svg: null }])
+      setAnnotations(prev => [...prev, { id: c.id, message: c.message, pos_x: c.pos_x, pos_y: c.pos_y, color: c.color, drawing_svg: null, page_number: c.page_number }])
       setPendingPos(null); setPendingText('')
     }
   }
@@ -277,7 +300,7 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
     })
     if (res.ok) {
       const c = await res.json()
-      setAnnotations(prev => [...prev, { id: c.id, message: c.message, pos_x: c.pos_x, pos_y: c.pos_y, color: c.color, drawing_svg: c.drawing_svg }])
+      setAnnotations(prev => [...prev, { id: c.id, message: c.message, pos_x: c.pos_x, pos_y: c.pos_y, color: c.color, drawing_svg: c.drawing_svg, page_number: c.page_number }])
     }
   }
 
@@ -361,57 +384,29 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
         </div>
       )}
 
-      {/* PDF viewer — annotation button + toolbar + viewer */}
+      {/* PDF viewer — 常态工具栏 + 容器 */}
       <div className="relative">
-        {/* 批注按钮（右上角） */}
+        {/* 常态工具栏（右上角 3 个图标）*/}
         {activeLibId && (
-          <button
-            onClick={() => { setAnnotMode(m => !m); setActiveTool(null); setDeleteMode(false); setPendingPos(null) }}
-            className={`absolute top-2 right-2 z-20 px-3 py-1.5 rounded-[10px] text-xs font-extrabold shadow-md
-              ${annotMode ? 'bg-peach text-white' : 'bg-white text-brown-text'}`}>
-            ✏️ 批注
-          </button>
-        )}
-
-        {/* 工具栏 */}
-        {annotMode && activeLibId && (
-          <div className="absolute top-12 right-2 z-20 bg-white rounded-[12px] shadow-lg p-2 flex flex-col gap-2">
-            <div className="flex gap-1.5">
-              <button
-                onClick={() => { setActiveTool(t => t === 'text' ? null : 'text'); setDeleteMode(false); setEditingId(null); setRelocating(false) }}
-                className={`px-3 h-8 rounded-lg text-xs font-extrabold transition-colors
-                  ${activeTool === 'text' ? 'bg-peach text-white' : 'bg-cream text-brown-text hover:bg-cream-card'}`}>
-                文字
-              </button>
-              <button
-                onClick={() => { setActiveTool(t => t === 'draw' ? null : 'draw'); setDeleteMode(false); setEditingId(null); setRelocating(false) }}
-                className={`px-3 h-8 rounded-lg text-xs font-extrabold transition-colors
-                  ${activeTool === 'draw' ? 'bg-peach text-white' : 'bg-cream text-brown-text hover:bg-cream-card'}`}>
-                手绘
-              </button>
-              <button
-                onClick={() => { setDeleteMode(d => !d); setActiveTool(null); setEditingId(null); setRelocating(false) }}
-                className={`px-3 h-8 rounded-lg text-xs font-extrabold transition-colors
-                  ${deleteMode ? 'bg-red-500 text-white' : 'bg-cream text-brown-text hover:bg-cream-card'}`}>
-                删除
-              </button>
-              <button
-                onClick={() => { setActiveTool(t => t === 'edit' ? null : 'edit'); setDeleteMode(false); setEditingId(null); setRelocating(false) }}
-                className={`px-3 h-8 rounded-lg text-xs font-extrabold transition-colors
-                  ${activeTool === 'edit' ? 'bg-peach text-white' : 'bg-cream text-brown-text hover:bg-cream-card'}`}>
-                编辑
-              </button>
-            </div>
-            <div className="flex gap-1.5">
-              {['#E07A5F', '#C54B38', '#81B29A', '#4A90D9'].map(c => (
-                <button key={c} onClick={() => setAnnotColor(c)}
-                  className={`w-7 h-7 rounded-full border-2 ${annotColor === c ? 'border-brown-text' : 'border-transparent'}`}
-                  style={{ background: c }} />
-              ))}
-            </div>
-            {showDual && currentPage > 1 && (
-              <p className="text-[10px] text-brown-mute w-32">双页模式定位不可用，请切单页批注</p>
-            )}
+          <div className="absolute top-2 right-2 z-20 bg-white/95 rounded-[10px] shadow-md p-1 flex gap-1">
+            <button title="文字" aria-label="文字"
+              onClick={() => { setActiveTool(t => t === 'text' ? null : 'text'); setDeleteMode(false); setEditingId(null) }}
+              className={`w-8 h-8 flex items-center justify-center rounded-md transition-colors
+                ${activeTool === 'text' ? 'bg-peach text-white' : 'text-brown-text hover:bg-cream'}`}>
+              <IconT />
+            </button>
+            <button title="手绘" aria-label="手绘"
+              onClick={() => { setActiveTool(t => t === 'draw' ? null : 'draw'); setDeleteMode(false); setEditingId(null) }}
+              className={`w-8 h-8 flex items-center justify-center rounded-md transition-colors
+                ${activeTool === 'draw' ? 'bg-peach text-white' : 'text-brown-text hover:bg-cream'}`}>
+              <IconPencil />
+            </button>
+            <button title="删除" aria-label="删除"
+              onClick={() => { setDeleteMode(d => !d); setActiveTool(null); setEditingId(null) }}
+              className={`w-8 h-8 flex items-center justify-center rounded-md transition-colors
+                ${deleteMode ? 'bg-red-500 text-white' : 'text-brown-text hover:bg-cream'}`}>
+              <IconTrash />
+            </button>
           </div>
         )}
 
@@ -445,94 +440,128 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
                 <div className="relative inline-block">
                   <Page pageNumber={currentPage} width={pageWidth}
                     renderTextLayer={false} renderAnnotationLayer={false} />
-                  {/* 批注 overlay（仅批注模式 + 单页）*/}
-                  {annotMode && (
-                    <div className="absolute inset-0 cursor-crosshair touch-none"
-                      onClick={e => {
-                        if (deleteMode) return
-                        const rect = e.currentTarget.getBoundingClientRect()
-                        const x = (e.clientX - rect.left) / rect.width
-                        const y = (e.clientY - rect.top) / rect.height
-                        if (relocating && editingId != null) {
-                          patchAnnotation(editingId, { pos_x: x, pos_y: y, message: editMessage, color: editColor })
-                          setRelocating(false); setEditingId(null)
-                          return
-                        }
-                        if (activeTool === 'text') {
-                          setPendingPos({ x, y }); setPendingText('')
-                        }
-                      }}
-                      onPointerDown={e => {
-                        if (activeTool !== 'draw' || deleteMode) return
-                        const rect = e.currentTarget.getBoundingClientRect()
-                        isDrawingRef.current = true
-                        setCurrentStroke([[(e.clientX - rect.left) / rect.width, (e.clientY - rect.top) / rect.height]])
-                        ;(e.target as Element).setPointerCapture(e.pointerId)
-                      }}
-                      onPointerMove={e => {
-                        if (!isDrawingRef.current || activeTool !== 'draw') return
-                        const rect = e.currentTarget.getBoundingClientRect()
-                        const nx = (e.clientX - rect.left) / rect.width
-                        const ny = (e.clientY - rect.top) / rect.height
-                        setCurrentStroke(prev => {
-                          const last = prev[prev.length - 1]
-                          if (last && Math.hypot(nx - last[0], ny - last[1]) < 0.005) return prev
-                          return [...prev, [nx, ny]]
-                        })
-                      }}
-                      onPointerUp={() => {
-                        if (!isDrawingRef.current) return
-                        isDrawingRef.current = false
-                        if (currentStroke.length >= 2) saveDrawing(currentStroke)
-                        setCurrentStroke([])
-                      }}>
-                      {/* 待输入文字定位框 */}
-                      {pendingPos && (
-                        <div className="absolute z-10" style={{ left: `${pendingPos.x * 100}%`, top: `${pendingPos.y * 100}%` }}>
-                          <input autoFocus value={pendingText} onChange={e => setPendingText(e.target.value)}
-                            onClick={e => e.stopPropagation()}
-                            onKeyDown={e => { if (e.key === 'Enter') saveAnnotation() }}
-                            placeholder="输入提示…"
-                            className="text-xs bg-white border-2 border-peach rounded px-2 py-1 shadow-lg w-40" />
-                        </div>
-                      )}
-                      {/* 正在绘制的笔画实时预览 */}
-                      {currentStroke.length > 0 && (
-                        <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 1 1" preserveAspectRatio="none">
-                          <polyline points={currentStroke.map(p => `${p[0]},${p[1]}`).join(' ')}
-                            fill="none" stroke={annotColor} strokeWidth="2.5"
-                            vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
-                        </svg>
-                      )}
-                    </div>
-                  )}
-                  {/* 已有定位气泡（文字批注，始终显示）*/}
-                  {annotations.filter(a => a.pos_x != null && a.pos_y != null && !a.drawing_svg).map(a => (
-                    <div key={a.id} className="absolute z-[5] -translate-x-1/2 -translate-y-1/2"
-                      style={{ left: `${a.pos_x! * 100}%`, top: `${a.pos_y! * 100}%` }}
-                      onClick={e => {
-                        e.stopPropagation()
-                        if (deleteMode) {
-                          deleteAnnotation(a.id)
-                        } else if (activeTool === 'edit' && !relocating) {
+                  {/* overlay 总是渲染；activeTool=null 时 pointer-events-none 不挡 */}
+                  <div className={`absolute inset-0 touch-none ${activeTool ? 'cursor-crosshair' : 'pointer-events-none'}`}
+                    onClick={e => {
+                      if (activeTool !== 'text' || deleteMode) return
+                      const rect = e.currentTarget.getBoundingClientRect()
+                      const x = (e.clientX - rect.left) / rect.width
+                      const y = (e.clientY - rect.top) / rect.height
+                      setPendingPos({ x, y }); setPendingText('')
+                    }}
+                    onPointerDown={e => {
+                      if (activeTool !== 'draw' || deleteMode) return
+                      const rect = e.currentTarget.getBoundingClientRect()
+                      isDrawingRef.current = true
+                      setCurrentStroke([[(e.clientX - rect.left) / rect.width, (e.clientY - rect.top) / rect.height]])
+                      ;(e.target as Element).setPointerCapture(e.pointerId)
+                    }}
+                    onPointerMove={e => {
+                      if (!isDrawingRef.current || activeTool !== 'draw') return
+                      const rect = e.currentTarget.getBoundingClientRect()
+                      const nx = (e.clientX - rect.left) / rect.width
+                      const ny = (e.clientY - rect.top) / rect.height
+                      setCurrentStroke(prev => {
+                        const last = prev[prev.length - 1]
+                        if (last && Math.hypot(nx - last[0], ny - last[1]) < 0.005) return prev
+                        return [...prev, [nx, ny]]
+                      })
+                    }}
+                    onPointerUp={() => {
+                      if (!isDrawingRef.current) return
+                      isDrawingRef.current = false
+                      if (currentStroke.length >= 2) saveDrawing(currentStroke)
+                      setCurrentStroke([])
+                    }}>
+                    {/* 待输入文字定位框 */}
+                    {pendingPos && (
+                      <div className="absolute z-10" style={{ left: `${pendingPos.x * 100}%`, top: `${pendingPos.y * 100}%` }}>
+                        <input autoFocus value={pendingText} onChange={e => setPendingText(e.target.value)}
+                          onClick={e => e.stopPropagation()}
+                          onKeyDown={e => { if (e.key === 'Enter') saveAnnotation() }}
+                          placeholder="输入提示…"
+                          className="text-xs bg-white border-2 border-peach rounded px-2 py-1 shadow-lg w-40" />
+                      </div>
+                    )}
+                    {/* 正在绘制的笔画实时预览 */}
+                    {currentStroke.length > 0 && (
+                      <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 1 1" preserveAspectRatio="none">
+                        <polyline points={currentStroke.map(p => `${p[0]},${p[1]}`).join(' ')}
+                          fill="none" stroke={annotColor} strokeWidth="2.5"
+                          vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    )}
+                  </div>
+                  {/* 已有定位气泡（文字批注，filter by currentPage）*/}
+                  {annotations.filter(a => a.page_number === currentPage && a.pos_x != null && a.pos_y != null && !a.drawing_svg).map(a => {
+                    const visual = dragVisualRef.current?.id === a.id ? dragVisualRef.current : null
+                    const displayX = visual ? visual.x : a.pos_x!
+                    const displayY = visual ? visual.y : a.pos_y!
+                    return (
+                      <div key={a.id}
+                        className="absolute z-[5] -translate-x-1/2 -translate-y-1/2 pointer-events-auto select-none"
+                        style={{ left: `${displayX * 100}%`, top: `${displayY * 100}%`, touchAction: 'none', cursor: (!deleteMode && !activeTool) ? 'grab' : 'pointer' }}
+                        onClick={e => {
+                          e.stopPropagation()
+                          if (deleteMode) deleteAnnotation(a.id)
+                        }}
+                        onDoubleClick={e => {
+                          e.stopPropagation()
+                          if (deleteMode) return
                           setEditingId(a.id)
                           setEditMessage(a.message)
                           setEditColor(a.color)
-                        }
-                      }}>
-                      <span className="inline-block text-[11px] font-bold text-white px-2 py-0.5 rounded-full shadow-md whitespace-nowrap"
-                        style={{ background: a.color }}>
-                        {deleteMode ? '🗑 ' : ''}{a.message}
-                      </span>
-                    </div>
-                  ))}
-                  {/* 已有手绘批注（SVG）*/}
-                  {annotations.filter(a => a.drawing_svg).map(a => {
+                        }}
+                        onPointerDown={e => {
+                          if (deleteMode || activeTool) return
+                          e.stopPropagation()
+                          ;(e.target as Element).setPointerCapture?.(e.pointerId)
+                          draggingRef.current = { id: a.id, startX: e.clientX, startY: e.clientY, movedPx: 0 }
+                        }}
+                        onPointerMove={e => {
+                          const drag = draggingRef.current
+                          if (!drag || drag.id !== a.id) return
+                          const dx = e.clientX - drag.startX
+                          const dy = e.clientY - drag.startY
+                          drag.movedPx = Math.max(drag.movedPx, Math.hypot(dx, dy))
+                          if (drag.movedPx > 5) {
+                            const container = (e.currentTarget as HTMLElement).parentElement
+                            if (container) {
+                              const rect = container.getBoundingClientRect()
+                              dragVisualRef.current = {
+                                id: a.id,
+                                x: (e.clientX - rect.left) / rect.width,
+                                y: (e.clientY - rect.top) / rect.height,
+                              }
+                              forceRerender(n => n + 1)
+                            }
+                          }
+                        }}
+                        onPointerUp={e => {
+                          const drag = draggingRef.current
+                          if (!drag || drag.id !== a.id) { draggingRef.current = null; return }
+                          if (drag.movedPx > 5 && dragVisualRef.current) {
+                            const { x, y } = dragVisualRef.current
+                            patchAnnotation(a.id, { pos_x: x, pos_y: y })
+                          }
+                          draggingRef.current = null
+                          dragVisualRef.current = null
+                          e.stopPropagation()
+                        }}>
+                        <span className="inline-block text-[11px] font-bold text-white px-2 py-0.5 rounded-full shadow-md whitespace-nowrap"
+                          style={{ background: a.color }}>
+                          {deleteMode ? '🗑 ' : ''}{a.message}
+                        </span>
+                      </div>
+                    )
+                  })}
+                  {/* 已有手绘批注（SVG，filter by currentPage）*/}
+                  {annotations.filter(a => a.page_number === currentPage && a.drawing_svg).map(a => {
                     let pts: Array<[number, number]> = []
                     try { pts = JSON.parse(a.drawing_svg!) } catch (_) { return null }
                     if (pts.length < 2) return null
                     return (
-                      <svg key={a.id} className={`absolute inset-0 w-full h-full ${deleteMode ? 'cursor-pointer' : 'pointer-events-none'}`}
+                      <svg key={a.id} className={`absolute inset-0 w-full h-full ${deleteMode ? 'cursor-pointer pointer-events-auto' : 'pointer-events-none'}`}
                         viewBox="0 0 1 1" preserveAspectRatio="none"
                         onClick={deleteMode ? (e => { e.stopPropagation(); deleteAnnotation(a.id) }) : undefined}>
                         <polyline points={pts.map(p => `${p[0]},${p[1]}`).join(' ')}
@@ -563,16 +592,8 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
         </button>
       </div>
 
-      {/* B.7 重定位 toast */}
-      {relocating && (
-        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-peach text-white
-          text-sm font-extrabold px-4 py-2 rounded-full shadow-lg pointer-events-none">
-          📍 点击 PDF 上的新位置来移动批注
-        </div>
-      )}
-
-      {/* B.6 编辑面板 modal */}
-      {editingId != null && !relocating && (
+      {/* 编辑面板 modal（双击气泡触发）*/}
+      {editingId != null && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
           onClick={() => setEditingId(null)}>
           <div className="bg-white rounded-[16px] p-5 w-full max-w-sm shadow-xl"
@@ -593,12 +614,6 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
                   style={{ background: c }} />
               ))}
             </div>
-
-            <button
-              onClick={() => setRelocating(true)}
-              className="w-full bg-cream text-brown-text font-extrabold py-2 rounded-[10px] mb-2 hover:bg-cream-card">
-              📍 重新定位（点 PDF 新位置）
-            </button>
 
             <div className="flex gap-2">
               <button onClick={() => setEditingId(null)}

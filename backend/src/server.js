@@ -1465,12 +1465,10 @@ app.post('/api/admin/annotations', requireParent, (req, res) => {
 app.get('/api/admin/annotations', requireParent, (req, res) => {
   try {
     const { library_id, page } = req.query
-    if (!library_id || !page) return res.status(400).json({ error: 'library_id, page required' })
-    const rows = db.prepare(`
-      SELECT * FROM pdf_annotations
-      WHERE account_id = ? AND pdf_library_id = ? AND page_number = ?
-      ORDER BY created_at ASC
-    `).all(req.accountId, library_id, page)
+    if (!library_id) return res.status(400).json({ error: 'library_id required' })
+    const rows = page
+      ? db.prepare(`SELECT * FROM pdf_annotations WHERE account_id = ? AND pdf_library_id = ? AND page_number = ? ORDER BY created_at`).all(req.accountId, library_id, page)
+      : db.prepare(`SELECT * FROM pdf_annotations WHERE account_id = ? AND pdf_library_id = ? ORDER BY page_number, created_at`).all(req.accountId, library_id)
     res.json(rows)
   } catch (err) {
     res.status(500).json({ error: err.message })
