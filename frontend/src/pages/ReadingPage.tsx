@@ -422,7 +422,7 @@ export default function ReadingPage() {
 
   // ── Other derived values ──────────────────────────────────────────────────
   const currentPdf = pool[pdfIdx]
-  const pdfUrl     = currentPdf ? `/api/library/${currentPdf.library_id}/file` : null
+  const pdfUrl     = currentPdf ? `/api/library/${currentPdf.library_id}/file.pdf` : null
   const pdfDocOptions = useMemo(() => ({ disableAutoFetch: true, disableStream: false }), [])
   const minDurS    = child?.min_duration_s != null ? child.min_duration_s : (config ? parseInt(config.min_duration_s) : 300)
   const remainingS = Math.max(0, minDurS - recorder.durationS)
