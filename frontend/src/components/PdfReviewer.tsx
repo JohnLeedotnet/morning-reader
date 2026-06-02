@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Document, Page, pdfjs } from 'react-pdf'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import 'react-pdf/dist/Page/AnnotationLayer.css'
@@ -441,6 +441,8 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
     return <p className="text-brown-mute text-sm text-center py-4">无 PDF 阅读记录</p>
   }
 
+  const pdfDocOptions = useMemo(() => ({ disableAutoFetch: true, disableStream: false }), [])
+
   // Sprint 0B Hotfix: 优先用 library_id 走 /api/library，老 session fallback 旧路径
   const activeLibId = activePdf
     ? pdfReads.find(r => r.pdf_filename === activePdf)?.pdf_library_id ?? null
@@ -544,6 +546,7 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
           {pdfFileUrl && (
             <Document
               file={pdfFileUrl}
+              options={pdfDocOptions}
               onLoadSuccess={async (doc) => {
                 setNumPages(doc.numPages)
                 try {

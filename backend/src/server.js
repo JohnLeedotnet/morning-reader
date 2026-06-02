@@ -433,6 +433,18 @@ app.get('/api/library/:id/file', (req, res) => {
     if (!fs.existsSync(filePath)) {
       return res.status(404).json({ error: 'file missing on disk', sha256: lib.sha256 });
     }
+
+    // Sprint PDF-Cache (2026-06-02): 让 CF + 浏览器缓存 PDF
+    // sha256 命名 → 内容永不变 → immutable 100% 安全
+    if (lib.is_private === 0) {
+      // 公开 PDF：CF 边缘 + 浏览器都长缓存（全球用户共享）
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+    } else {
+      // 私有 PDF：仅浏览器缓存（CF 不缓存防跨用户泄露）
+      res.setHeader('Cache-Control', 'private, max-age=86400, immutable')
+      res.setHeader('Vary', 'Cookie')
+    }
+
     res.sendFile(filePath);
   } catch (err) {
     res.status(500).json({ error: err.message });

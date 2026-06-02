@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { Document, Page, pdfjs } from 'react-pdf'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
@@ -423,6 +423,7 @@ export default function ReadingPage() {
   // ── Other derived values ──────────────────────────────────────────────────
   const currentPdf = pool[pdfIdx]
   const pdfUrl     = currentPdf ? `/api/library/${currentPdf.library_id}/file` : null
+  const pdfDocOptions = useMemo(() => ({ disableAutoFetch: true, disableStream: false }), [])
   const minDurS    = child?.min_duration_s != null ? child.min_duration_s : (config ? parseInt(config.min_duration_s) : 300)
   const remainingS = Math.max(0, minDurS - recorder.durationS)
   const pdfShort   = currentPdf?.pdf_filename.split('/').pop() ?? ''
@@ -529,6 +530,7 @@ export default function ReadingPage() {
             <div className="relative">
               <Document
                 file={pdfUrl}
+                options={pdfDocOptions}
                 onLoadError={(err) => console.error('[PDF onLoadError]', err)}
                 onSourceError={(err) => console.error('[PDF onSourceError]', err)}
                 onLoadSuccess={async (doc) => {
