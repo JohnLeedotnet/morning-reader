@@ -115,3 +115,15 @@ ls -lt "/Users/homer/Xcode project/Morning Reader/data/recordings/" | head -20
 1. `fnm install <version> && fnm use <version>`
 2. 更新两个 plist 中的 node/npm 路径（`/Users/homer/.local/share/fnm/node-versions/v<X>/installation/bin/`）
 3. `launchctl unload` → 改 plist → `launchctl load` 两个服务
+
+## Hotfix-LAN-Dev (2026-06-02)
+
+backend 现在同时 listen :3001 HTTP（给 cloudflared）+ :5173 HTTPS（mkcert，给局域网设备）。
+两个端口共用同一 Express app + serve 生产 dist。
+
+不再需要 Vite dev server。本地开发时手动启动：
+
+    cd frontend && npm run dev -- --port 5174
+
+之前 `com.morningreader.frontend` (Vite dev) launchd 占着 5173，导致家用设备
+加载 dev mode 源码 + 几百模块实时编译，切书 5-10 秒。已停服务、plist 改名 .disabled。

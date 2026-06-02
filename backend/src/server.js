@@ -1566,9 +1566,25 @@ if (fs.existsSync(FRONTEND_DIST)) {
   console.warn('[Sprint 0C-Hotfix] FRONTEND_DIST not found at', FRONTEND_DIST, '— only API will be served')
 }
 
-// Backend 只跑 HTTP:3001（Cloudflare Tunnel + Vite proxy /api → localhost:3001）
-// HTTPS 由 Vite dev server 负责，不在 backend 开 HTTPS 避免抢占 5173
+// Hotfix-LAN-Dev (2026-06-02): backend 同时 listen HTTPS:5173 用 mkcert 证书
+// 之前 5173 HTTPS 由 Vite dev server 负责，但 dev mode 实时编译几百模块
+// 局域网用户加载慢 5-10s。现在 backend 直接 serve 生产 dist via HTTPS:5173。
+const MKCERT_KEY = path.join(__dirname, '../../frontend/certs/localhost+3-key.pem')
+const MKCERT_CERT = path.join(__dirname, '../../frontend/certs/localhost+3.pem')
+
 const HTTP_PORT = parseInt(process.env.PORT || '3001', 10)
 http.createServer(app).listen(HTTP_PORT, () => {
-  console.log(`Morning Reader backend HTTP listening :${HTTP_PORT}`)
+  console.log(`Morning Reader backend HTTP listening :${HTTP_PORT} (for cloudflared tunnel)`)
 })
+
+if (fs.existsSync(MKCERT_KEY) && fs.existsSync(MKCERT_CERT)) {
+  const httpsOptions = {
+    key: fs.readFileSync(MKCERT_KEY),
+    cert: fs.readFileSync(MKCERT_CERT),
+  }
+  https.createServer(httpsOptions, app).listen(5173, () => {
+    console.log(`Morning Reader backend HTTPS listening :5173 (mkcert, for LAN devices)`)
+  })
+} else {
+  console.warn(`[Hotfix-LAN-Dev] mkcert certs not found at ${MKCERT_CERT} — HTTPS:5173 skipped, LAN won't work`)
+}
