@@ -448,7 +448,7 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
     ? pdfReads.find(r => r.pdf_filename === activePdf)?.pdf_library_id ?? null
     : null
   const pdfFileUrl = !activePdf ? null
-    : activeLibId ? `/api/library/${activeLibId}/file.pdf`
+    : activeLibId ? `/api/library/${activeLibId}/file`
     : childId ? `/api/children/${childId}/pdfs/file?path=${encodeURIComponent(activePdf)}`
     : `/api/pdfs/file?path=${encodeURIComponent(activePdf)}`
 
