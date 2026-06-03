@@ -1,4 +1,27 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Component, useEffect, useMemo, useRef, useState } from 'react'
+import type { ErrorInfo, ReactNode } from 'react'
+
+class PdfErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; msg: string }> {
+  state = { hasError: false, msg: '' }
+  static getDerivedStateFromError(err: Error) {
+    return { hasError: true, msg: err.message || 'PDF 加载失败' }
+  }
+  componentDidCatch(err: Error, info: ErrorInfo) {
+    console.error('[PdfErrorBoundary]', err, info)
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="bg-red-50 border-2 border-red-200 rounded-[12px] p-4 text-center">
+          <p className="text-red-700 font-bold text-sm">⚠️ PDF 加载失败</p>
+          <p className="text-red-600 text-xs mt-1">{this.state.msg}</p>
+          <p className="text-brown-mute text-xs mt-2">家长面板其他功能不受影响，可刷新页面重试</p>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
 import { Document, Page, pdfjs } from 'react-pdf'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import 'react-pdf/dist/Page/AnnotationLayer.css'
@@ -453,6 +476,7 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
     : `/api/pdfs/file?path=${encodeURIComponent(activePdf)}`
 
   return (
+    <PdfErrorBoundary>
     <div className="flex flex-col gap-3">
       {mode === 'reading' && (
         <>
@@ -802,5 +826,6 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
         </div>
       )}
     </div>
+    </PdfErrorBoundary>
   )
 }
