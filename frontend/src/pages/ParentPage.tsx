@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { adminFetch, adminRecordingUrl } from '../lib/adminFetch'
-import PdfReviewer from '../components/PdfReviewer'
+import PdfReviewer, { PdfErrorBoundary } from '../components/PdfReviewer'
 import { Document, Page, pdfjs } from 'react-pdf'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import 'react-pdf/dist/Page/AnnotationLayer.css'
@@ -201,11 +201,13 @@ function SessionCard({ session, expandedAudio, onToggleAudio, onReview, onDelete
 
       {expanded && (
         <div className="mt-5 border-t border-cream-card pt-5">
-          <PdfReviewer
-            sessionId={session.id}
-            mode={isRecitation ? 'recitation' : 'reading'}
-            audioElement={isRecitation ? null : audioEl}
-          />
+          <PdfErrorBoundary>
+            <PdfReviewer
+              sessionId={session.id}
+              mode={isRecitation ? 'recitation' : 'reading'}
+              audioElement={isRecitation ? null : audioEl}
+            />
+          </PdfErrorBoundary>
         </div>
       )}
     </div>
@@ -565,9 +567,12 @@ interface MeData {
 
 function UploadsTab() {
   const [items, setItems] = useState<Array<{ id: number; filename: string; size_bytes: number; is_private: number; created_at: string }>>([])
+  const [allItems, setAllItems] = useState<Array<{ id: number; filename: string; size_bytes: number; is_private: number; created_at: string; uploader_username: string; uploader_account_id: number }>>([])
   const [usedMb, setUsedMb] = useState(0)
   const [quotaMb, setQuotaMb] = useState(200)
   const [unlimited, setUnlimited] = useState(false)
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false)
+  const [scope, setScope] = useState<'mine' | 'all'>('mine')
   const [uploading, setUploading] = useState(false)
   const [progress, setProgress] = useState<number | null>(null)
   const [dragOver, setDragOver] = useState(false)
@@ -578,10 +583,17 @@ function UploadsTab() {
       .then(r => r.ok ? r.json() : null)
       .then(d => {
         if (!d) return
-        setItems(d.items); setUsedMb(d.used_mb); setQuotaMb(d.quota_mb); setUnlimited(d.unlimited)
+        setItems(d.items); setUsedMb(d.used_mb); setQuotaMb(d.quota_mb)
+        setUnlimited(d.unlimited); setIsSuperAdmin(d.unlimited)
       })
   }
-  useEffect(refresh, [])
+  const refreshAll = () => {
+    fetch('/api/admin/library/all-uploads')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) setAllItems(d.items) })
+  }
+  useEffect(() => { refresh(); }, [])
+  useEffect(() => { if (scope === 'all' && isSuperAdmin) refreshAll() }, [scope, isSuperAdmin])
 
   const upload = async (file: File) => {
     if (!file.name.toLowerCase().endsWith('.pdf')) { setMessage('仅支持 PDF'); return }
@@ -639,6 +651,52 @@ function UploadsTab() {
 
   return (
     <div className="space-y-4">
+      {/* superadmin 视角切换 */}
+      {isSuperAdmin && (
+        <div className="flex gap-2">
+          <button onClick={() => setScope('mine')}
+            className={`flex-1 py-2 rounded-[12px] text-sm font-extrabold transition-colors
+              ${scope === 'mine' ? 'bg-peach text-white' : 'bg-white text-brown-mute hover:bg-cream-card'}`}>
+            我的上传
+          </button>
+          <button onClick={() => setScope('all')}
+            className={`flex-1 py-2 rounded-[12px] text-sm font-extrabold transition-colors
+              ${scope === 'all' ? 'bg-peach text-white' : 'bg-white text-brown-mute hover:bg-cream-card'}`}>
+            所有用户
+          </button>
+        </div>
+      )}
+
+      {scope === 'all' ? (
+        /* ── 全账号视图（superadmin）── */
+        <div className="space-y-2">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-sm font-extrabold text-brown-text">所有用户上传（{allItems.length}）</span>
+            <button onClick={refreshAll} className="text-xs text-brown-mute hover:text-peach">刷新</button>
+          </div>
+          {allItems.length === 0 ? (
+            <p className="text-brown-mute text-sm text-center py-4">暂无上传记录</p>
+          ) : allItems.map(it => (
+            <div key={it.id} className="bg-white rounded-[12px] p-3 flex items-center gap-3 shadow-[0_2px_12px_rgba(224,122,95,0.06)]">
+              <div className="flex-1 min-w-0">
+                <p className="font-bold text-brown-text text-sm truncate">{it.filename}</p>
+                <p className="text-xs text-brown-mute">
+                  {Math.ceil(it.size_bytes / 1024 / 1024)} MB · {it.created_at?.slice(0,10)} · @{it.uploader_username}
+                </p>
+              </div>
+              <span className={`text-xs font-bold px-2 py-1 rounded-[6px] ${it.is_private ? 'bg-cream text-brown-mute' : 'bg-mint/20 text-mint'}`}>
+                {it.is_private ? '私有' : '公开'}
+              </span>
+              <button onClick={async () => {
+                if (!confirm(`确认删除「${it.filename}」（@${it.uploader_username}）？`)) return
+                await fetch(`/api/library/${it.id}`, { method: 'DELETE' })
+                refreshAll()
+              }} className="text-xs font-extrabold text-red-500 hover:text-red-600 px-2 py-1.5">删除</button>
+            </div>
+          ))}
+        </div>
+      ) : (
+      <>
       {/* 配额 */}
       <div className="bg-white rounded-[16px] p-4 shadow-[0_4px_24px_rgba(224,122,95,0.08)]">
         <div className="flex items-center justify-between mb-2">
@@ -695,6 +753,8 @@ function UploadsTab() {
           </div>
         ))}
       </div>
+      </>
+      )}
     </div>
   )
 }

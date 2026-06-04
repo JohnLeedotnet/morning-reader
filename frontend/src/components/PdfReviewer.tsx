@@ -1,7 +1,7 @@
 import { Component, useEffect, useMemo, useRef, useState } from 'react'
 import type { ErrorInfo, ReactNode } from 'react'
 
-class PdfErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; msg: string }> {
+export class PdfErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; msg: string }> {
   state = { hasError: false, msg: '' }
   static getDerivedStateFromError(err: Error) {
     return { hasError: true, msg: err.message || 'PDF 加载失败' }
@@ -476,7 +476,6 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
     : `/api/pdfs/file?path=${encodeURIComponent(activePdf)}`
 
   return (
-    <PdfErrorBoundary>
     <div className="flex flex-col gap-3">
       {mode === 'reading' && (
         <>
@@ -826,6 +825,5 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
         </div>
       )}
     </div>
-    </PdfErrorBoundary>
   )
 }
