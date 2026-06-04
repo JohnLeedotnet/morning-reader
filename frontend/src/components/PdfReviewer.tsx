@@ -140,6 +140,7 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
   const [syncOffsetMs, setSyncOffsetMs] = useState(1500)
   const containerRef = useRef<HTMLDivElement>(null)
   const [containerW, setContainerW] = useState(0)
+  const pdfDocOptions = useMemo(() => ({ disableAutoFetch: true, disableStream: false }), [])
 
   useEffect(() => {
     const h = () => { setWinW(window.innerWidth); setWinH(window.innerHeight) }
@@ -463,8 +464,6 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
   if (pdfReads.length === 0) {
     return <p className="text-brown-mute text-sm text-center py-4">无 PDF 阅读记录</p>
   }
-
-  const pdfDocOptions = useMemo(() => ({ disableAutoFetch: true, disableStream: false }), [])
 
   // Sprint 0B Hotfix: 优先用 library_id 走 /api/library，老 session fallback 旧路径
   const activeLibId = activePdf
