@@ -11,9 +11,19 @@ interface Child {
   min_duration_s: number | null
   todayStatus: string | null
   pdfsRequired: number | null
+  recitation_mode?: string | null
+  recitation_weekday?: number | null
+  requires_recitation?: number | null
 }
 
-interface RecPlan { id: number; pdf_filename: string; status: string }
+interface RecPlan { id: number; pdf_filename: string; status: string; pdf_library_id?: number | null }
+
+interface PoolEntry {
+  library_id: number
+  filename: string
+  read_count?: number
+  advance_after_reads?: number
+}
 
 interface Config {
   window_start: string
@@ -44,14 +54,17 @@ function StatusBadge({ status }: { status: string | null }) {
   )
 }
 
+const WEEKDAY_NAMES = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+
 const FAMILY_TOOLS = [
   { name: '照片库', icon: '📷', url: 'http://192.168.50.167:8765' },
 ] as const
 
-function ChildCard({ child, recitationPlan, config }: {
+function ChildCard({ child, recitationPlan, config, poolEntries }: {
   child: Child
   recitationPlan: RecPlan | null
   config: Config | null
+  poolEntries: PoolEntry[]
 }) {
   const scale    = child.font_scale ?? 1.0
   const nameSize = Math.round(22 * scale)
@@ -63,6 +76,11 @@ function ChildCard({ child, recitationPlan, config }: {
   const childMinS   = child.min_duration_s ?? parseInt(config?.min_duration_s ?? '300')
   const childMinMin = Math.round(childMinS / 60)
   const windowText  = config ? `${config.window_start} - ${config.window_end}` : '7:00 - 8:00'
+
+  const activeRecPlan = (recitationPlan?.status === 'scheduled' || recitationPlan?.status === 'retry')
+    ? recitationPlan : null
+  const weekday = child.recitation_weekday ?? 5
+  const isAuto  = (child.recitation_mode ?? 'auto') === 'auto'
 
   return (
     <div className="flex-1 min-w-0 bg-white rounded-[20px] p-6
@@ -77,20 +95,58 @@ function ChildCard({ child, recitationPlan, config }: {
         <StatusBadge status={child.todayStatus} />
       </div>
 
-      {recitationPlan && (recitationPlan.status === 'scheduled' || recitationPlan.status === 'retry') && (
+      {activeRecPlan && (
         <Link to={`/recitation/${child.id}`}
           className={`block rounded-[14px] p-3 hover:brightness-110 transition-[filter] ${
-            recitationPlan.status === 'retry'
+            activeRecPlan.status === 'retry'
               ? 'bg-orange-500 text-white'
               : 'bg-peach-deep text-white'
           }`}>
           <div className="text-xs font-bold opacity-80">
-            {recitationPlan.status === 'retry' ? '🔁 需要重新背诵' : '📚 今日特殊任务'}
+            {activeRecPlan.status === 'retry' ? '🔁 需要重新背诵' : '📚 今日特殊任务'}
           </div>
           <div className="font-extrabold" style={{ fontSize: btnSize }}>
-            背诵考核 · {recitationPlan.pdf_filename.split('/').pop()?.replace('.pdf', '')}
+            背诵考核 · {activeRecPlan.pdf_filename.split('/').pop()?.replace('.pdf', '')}
           </div>
         </Link>
+      )}
+
+      {/* 今日书单进度 */}
+      {poolEntries.length === 0 ? (
+        <div className="bg-orange-50 rounded-[12px] px-3 py-2.5 text-[13px] text-orange-700 font-bold">
+          📚 全部 PDF 已读完，请家长在考核计划页补充
+        </div>
+      ) : (
+        <div className="bg-cream/60 rounded-[12px] px-3 py-2 space-y-1.5">
+          {poolEntries.map(entry => {
+            const n = entry.read_count ?? 0
+            const m = entry.advance_after_reads ?? 5
+            const isActiveRec = activeRecPlan?.pdf_library_id != null
+              ? activeRecPlan.pdf_library_id === entry.library_id
+              : activeRecPlan?.pdf_filename?.split('/').pop() === entry.filename.split('/').pop()
+            const graduated = n >= m
+            const shortName = entry.filename.replace(/\.pdf$/i, '')
+
+            return (
+              <div key={entry.library_id} className="flex items-center justify-between gap-2 min-w-0">
+                <span className="text-[12px] text-brown-text truncate flex-1">{shortName}</span>
+                {isActiveRec ? (
+                  <span className="text-[11px] font-extrabold text-peach-deep shrink-0">📚 今日背诵</span>
+                ) : graduated && isAuto ? (
+                  <span className="text-[11px] font-extrabold text-mint shrink-0">
+                    ✓ 已可毕业，等{WEEKDAY_NAMES[weekday]}考核
+                  </span>
+                ) : graduated ? (
+                  <span className="text-[11px] font-extrabold text-mint shrink-0">✓ 已达标</span>
+                ) : (
+                  <span className="text-[11px] font-bold text-brown-mute shrink-0 tabular-nums">
+                    {n}/{m} 次
+                  </span>
+                )}
+              </div>
+            )
+          })}
+        </div>
       )}
 
       <div className="flex flex-col gap-2">
@@ -195,6 +251,7 @@ export default function HomePage() {
   const [children,        setChildren]        = useState<Child[]>([])
   const [childrenLoaded,  setChildrenLoaded]  = useState(false)
   const [recitationPlans, setRecitationPlans] = useState<Record<string, RecPlan | null>>({})
+  const [poolMap,         setPoolMap]         = useState<Record<string, PoolEntry[]>>({})
   const [config,          setConfig]          = useState<Config | null>(null)
   const [error,           setError]           = useState('')
   // Sprint 1A-3: 三态 — undefined=加载中 / null=未登录 / object=已登录
@@ -221,16 +278,24 @@ export default function HomePage() {
     ]).then(async ([childrenData, cfg]: [Child[], Config]) => {
       setConfig(cfg)
       const plans: Record<string, RecPlan | null> = {}
+      const pools: Record<string, PoolEntry[]>    = {}
       await Promise.all(
         childrenData.map((c: Child) =>
-          fetch(`/api/children/${c.id}/today-recitation`)
-            .then(r => r.json())
-            .then(data => { plans[c.id] = data })
-            .catch(() => { plans[c.id] = null })
+          Promise.all([
+            fetch(`/api/children/${c.id}/today-recitation`)
+              .then(r => r.json())
+              .then(data => { plans[c.id] = data })
+              .catch(() => { plans[c.id] = null }),
+            fetch(`/api/children/${c.id}/pool`)
+              .then(r => r.json())
+              .then((data: PoolEntry[]) => { pools[c.id] = Array.isArray(data) ? data : [] })
+              .catch(() => { pools[c.id] = [] }),
+          ])
         )
       )
       setChildren(childrenData)
       setRecitationPlans(plans)
+      setPoolMap(pools)
       setChildrenLoaded(true)
     }).catch(e => { setError((e as Error).message); setChildrenLoaded(true) })
   }, [authMe])
@@ -323,7 +388,7 @@ export default function HomePage() {
       <div className="w-full max-w-3xl flex flex-wrap justify-center gap-5">
         {children.map(child => (
           <div key={child.id} className="w-full sm:w-[calc(50%-10px)] max-w-md">
-            <ChildCard child={child} recitationPlan={recitationPlans[child.id] ?? null} config={config} />
+            <ChildCard child={child} recitationPlan={recitationPlans[child.id] ?? null} config={config} poolEntries={poolMap[child.id] ?? []} />
           </div>
         ))}
       </div>
