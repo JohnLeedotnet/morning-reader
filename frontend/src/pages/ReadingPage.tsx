@@ -10,7 +10,7 @@ pdfjs.GlobalWorkerOptions.workerSrc = workerUrl
 
 const CHUNK_SIZE = 256 * 1024  // 256KB per chunk（抖动 5KB/s 下也能 < 90s 完成单块）
 
-interface PoolEntry { id: number; child_id: string; library_id: number; sha256?: string; pdf_filename: string; sort_order?: number }
+interface PoolEntry { id: number; child_id: string; library_id: number; sha256?: string; pdf_filename: string; sort_order?: number; read_count?: number; advance_after_reads?: number }
 interface Child    { id: string; name: string; age: number; font_scale: number; min_duration_s?: number | null }
 interface Config   {
   window_start: string; window_end: string
@@ -105,6 +105,9 @@ export default function ReadingPage() {
   const [uploadProgress, setUploadProgress] = useState(0)
   const [error,        setError]        = useState('')
   const [submitError,  setSubmitError]  = useState('')
+  const [dwellToast,   setDwellToast]   = useState<string | null>(null)
+  const dwelledLibsRef = useRef<Set<number>>(new Set())  // session-level dedup
+  const pageEnterRef   = useRef<{ page: number; libId: number; time: number } | null>(null)
   const blobRef    = useRef<Blob | null>(null)
   const metricsRef = useRef<Record<string, unknown>>({})
   const [pageAnnotations, setPageAnnotations] = useState<Array<{ id: number; page_number: number; message: string; pos_x: number | null; pos_y: number | null; color: string; drawing_svg?: string | null }>>([])
@@ -185,6 +188,35 @@ export default function ReadingPage() {
       setPage(1); prevLayout.current = pdfLayout
     }
   }, [pdfLayout])
+
+  // ── 倒数第 3 页停留 ≥ 1s → 计数 +1 ──────────────────────────────────────
+  useEffect(() => {
+    if (!sessionId || !pool[pdfIdx] || numPages <= 0) return
+    const libId = pool[pdfIdx].library_id
+    pageEnterRef.current = { page, libId, time: Date.now() }
+    const timer = setTimeout(() => {
+      const ref = pageEnterRef.current
+      if (!ref || ref.page !== page || ref.libId !== libId) return
+      if (page < numPages - 2) return  // 非倒数第 3 页（含）
+      if (dwelledLibsRef.current.has(libId)) return  // 同本 session 已计过
+      const dwell_ms = Date.now() - ref.time
+      fetch(`/api/sessions/${sessionId}/page-dwelled`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pdf_library_id: libId, page_number: page, total_pages: numPages, dwell_ms }),
+      })
+        .then(r => r.json())
+        .then(({ counted, new_count }: { counted: boolean; new_count: number }) => {
+          if (!counted) return
+          dwelledLibsRef.current.add(libId)
+          const threshold = pool[pdfIdx]?.advance_after_reads ?? 5
+          setDwellToast(`📖 已记 ${new_count}/${threshold} 次`)
+          setTimeout(() => setDwellToast(null), 3000)
+        })
+        .catch(() => {/* 静默失败 */})
+    }, 1000)
+    return () => clearTimeout(timer)
+  }, [page, pdfIdx, sessionId, numPages]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Recorder ─────────────────────────────────────────────────────────────
   const maxSilenceS = config ? parseInt(config.max_consecutive_silence_s) : 15
@@ -457,6 +489,12 @@ export default function ReadingPage() {
 
   return (
     <div className="h-screen bg-cream flex flex-col items-center justify-center p-4 overflow-hidden">
+      {/* ── 计数 toast ── */}
+      {dwellToast && (
+        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 bg-shell-dark/90 text-[#F5E8DD] text-sm font-bold px-5 py-2 rounded-full shadow-lg pointer-events-none">
+          {dwellToast}
+        </div>
+      )}
       <div
         className={`w-full ${frameMaxW} rounded-[28px] overflow-hidden
           shadow-[0_24px_80px_rgba(61,43,31,0.22),0_4px_16px_rgba(61,43,31,0.10)]
@@ -479,7 +517,12 @@ export default function ReadingPage() {
 
           <div className="flex-1 text-center min-w-0 px-2">
             <p className="text-[12px] text-[#C09A80] font-bold truncate">{pdfShort}</p>
-            <p className="text-[11px] text-[#9A7060] mt-0.5">第 {pdfIdx + 1} 本 / 共 {pool.length} 本</p>
+            <p className="text-[11px] text-[#9A7060] mt-0.5">
+              第 {pdfIdx + 1} 本 / 共 {pool.length} 本
+              {currentPdf?.read_count != null &&
+                <span className="ml-1.5 text-[#7ABCAA]">· 已读 {currentPdf.read_count}/{currentPdf.advance_after_reads ?? 5} 次</span>
+              }
+            </p>
           </div>
 
           <div className="text-right shrink-0">
