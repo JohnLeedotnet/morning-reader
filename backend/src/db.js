@@ -313,4 +313,84 @@ try {
   }
 } catch (e) { console.error('PIN migration:', e.message) }
 
+// Sprint Rotation-1 M1: 孩子考核字段 + pdf_read_counts 表 + 历史回填
+
+// A. children 表新增考核相关字段
+try { db.exec("ALTER TABLE children ADD COLUMN time_window_start TEXT DEFAULT NULL") } catch(_) {}
+try { db.exec("ALTER TABLE children ADD COLUMN time_window_end TEXT DEFAULT NULL") } catch(_) {}
+try { db.exec("ALTER TABLE children ADD COLUMN advance_after_reads INTEGER DEFAULT 5") } catch(_) {}
+try { db.exec("ALTER TABLE children ADD COLUMN requires_recitation INTEGER DEFAULT 1") } catch(_) {}
+try { db.exec("ALTER TABLE children ADD COLUMN recitation_mode TEXT DEFAULT 'auto'") } catch(_) {}
+try { db.exec("ALTER TABLE children ADD COLUMN recitation_weekday INTEGER DEFAULT 5") } catch(_) {}
+
+// C. recitation_plans 新字段
+try { db.exec("ALTER TABLE recitation_plans ADD COLUMN auto INTEGER DEFAULT 0") } catch(_) {}
+try { db.exec("ALTER TABLE recitation_plans ADD COLUMN pdf_library_id INTEGER REFERENCES pdf_library(id)") } catch(_) {}
+
+// B. pdf_read_counts 表（per-child × per-book 已读次数）
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS pdf_read_counts (
+      child_id    TEXT NOT NULL,
+      library_id  INTEGER NOT NULL,
+      count       INTEGER DEFAULT 0,
+      updated_at  TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (child_id, library_id),
+      FOREIGN KEY (child_id) REFERENCES children(id),
+      FOREIGN KEY (library_id) REFERENCES pdf_library(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_pdf_read_counts_child ON pdf_read_counts(child_id);
+  `)
+} catch (e) { console.error('create pdf_read_counts:', e.message) }
+
+// B2. pdf_read_counts_session_mark（防止同一 session 重复计数）
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS pdf_read_counts_session_mark (
+      session_id INTEGER NOT NULL,
+      library_id INTEGER NOT NULL,
+      PRIMARY KEY (session_id, library_id)
+    );
+  `)
+} catch (e) { console.error('create pdf_read_counts_session_mark:', e.message) }
+
+// D. 历史回填（近似：取所有 passed reading session 中翻到倒数第 3 页以后的书）
+try {
+  // pe.pdf_filename 可能含路径前缀（'path/file.pdf'），pdf_library.filename 只有文件名
+  // 用 SUBSTR(..., INSTR(...,'/')+1) 取 basename 做 JOIN
+  db.exec(`
+    INSERT OR REPLACE INTO pdf_read_counts (child_id, library_id, count)
+    SELECT
+      rs.child_id,
+      pl.id AS library_id,
+      COUNT(DISTINCT rs.id) AS count
+    FROM reading_sessions rs
+    JOIN pdf_page_events pe ON pe.session_id = rs.id
+    JOIN pdf_library pl
+      ON pl.filename = SUBSTR(pe.pdf_filename, INSTR(pe.pdf_filename,'/')+1)
+    WHERE rs.status = 'passed'
+      AND rs.session_type = 'reading'
+      AND pe.page_number >= (
+        SELECT MAX(pe2.page_number) - 2
+        FROM pdf_page_events pe2
+        WHERE pe2.session_id = rs.id
+      )
+    GROUP BY rs.child_id, pl.id
+  `)
+  console.log('[Rotation-1 M1] Backfilled pdf_read_counts from history')
+} catch (e) { console.error('pdf_read_counts backfill:', e.message) }
+
+// Mike & Peyton 初始考核设定
+try {
+  db.exec(`
+    UPDATE children
+    SET requires_recitation = 1,
+        recitation_mode     = 'auto',
+        recitation_weekday  = 5,
+        advance_after_reads = CASE WHEN advance_after_reads IS NULL OR advance_after_reads = 5 THEN 5 ELSE advance_after_reads END
+    WHERE id IN ('mike', 'peyton')
+      AND (requires_recitation IS NULL OR requires_recitation = 1)
+  `)
+} catch (e) { console.error('Rotation-1 M1 seed mike/peyton recitation:', e.message) }
+
 module.exports = db;
