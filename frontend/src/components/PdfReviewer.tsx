@@ -140,7 +140,7 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
   const [syncOffsetMs, setSyncOffsetMs] = useState(1500)
   const containerRef = useRef<HTMLDivElement>(null)
   const [containerW, setContainerW] = useState(0)
-  const pdfDocOptions = useMemo(() => ({ disableAutoFetch: true, disableStream: false }), [])
+  const pdfDocOptions = useMemo(() => ({}), [])
 
   useEffect(() => {
     const h = () => { setWinW(window.innerWidth); setWinH(window.innerHeight) }

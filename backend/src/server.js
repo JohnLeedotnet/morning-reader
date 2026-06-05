@@ -456,7 +456,7 @@ app.get('/api/library/list', (req, res) => {
 })
 
 // Sprint 2-Hotfix Bug1: PDF 文件下载加鉴权 + 权限校验
-app.get(['/api/library/:id/file', '/api/library/:id/file.pdf'], (req, res) => {
+app.get('/api/library/:id/file', (req, res) => {
   try {
     const session = auth.getCurrentSession(db, req.cookies?.auth_token)
     if (!session) return res.status(401).json({ error: 'not authenticated' })
