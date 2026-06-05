@@ -20,7 +20,7 @@ interface RecPlan { id: number; pdf_filename: string; status: string; pdf_librar
 
 interface PoolEntry {
   library_id: number
-  filename: string
+  pdf_filename: string
   read_count?: number
   advance_after_reads?: number
 }
@@ -106,7 +106,7 @@ function ChildCard({ child, recitationPlan, config, poolEntries }: {
             {activeRecPlan.status === 'retry' ? '🔁 需要重新背诵' : '📚 今日特殊任务'}
           </div>
           <div className="font-extrabold" style={{ fontSize: btnSize }}>
-            背诵考核 · {activeRecPlan.pdf_filename.split('/').pop()?.replace('.pdf', '')}
+            背诵考核 · {activeRecPlan.pdf_filename?.split('/').pop()?.replace('.pdf', '') ?? '未知 PDF'}
           </div>
         </Link>
       )}
@@ -123,9 +123,9 @@ function ChildCard({ child, recitationPlan, config, poolEntries }: {
             const m = entry.advance_after_reads ?? 5
             const isActiveRec = activeRecPlan?.pdf_library_id != null
               ? activeRecPlan.pdf_library_id === entry.library_id
-              : activeRecPlan?.pdf_filename?.split('/').pop() === entry.filename.split('/').pop()
+              : activeRecPlan?.pdf_filename?.split('/').pop() === entry.pdf_filename?.split('/').pop()
             const graduated = n >= m
-            const shortName = entry.filename.replace(/\.pdf$/i, '')
+            const shortName = entry.pdf_filename?.replace(/\.pdf$/i, '') ?? ''
 
             return (
               <div key={entry.library_id} className="flex items-center justify-between gap-2 min-w-0">
