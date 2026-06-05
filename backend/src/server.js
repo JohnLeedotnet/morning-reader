@@ -114,21 +114,60 @@ app.use(cors());
 app.use(express.json());
 app.use(cookieParser());
 
+// Sprint Rotation-1 M2: cursor 按 (category_path, id) 字典序前进
+function advanceCursor(childId) {
+  const child = db.prepare('SELECT cursor_library_id, account_id FROM children WHERE id=?').get(childId)
+  if (!child || !child.cursor_library_id) return null
+  const current = db.prepare('SELECT id, category_path FROM pdf_library WHERE id=?').get(child.cursor_library_id)
+  if (!current) return null
+  // 优先：同 category 内 id > current 的最小 id
+  let next = db.prepare(`
+    SELECT id, filename FROM pdf_library
+    WHERE id > ? AND category_path = ?
+      AND (is_private=0 OR uploader_account_id=?)
+    ORDER BY id LIMIT 1
+  `).get(current.id, current.category_path, child.account_id)
+  // 没有则：字典序下一个 category 的最小 id
+  if (!next) {
+    next = db.prepare(`
+      SELECT id, filename FROM pdf_library
+      WHERE category_path > ?
+        AND (is_private=0 OR uploader_account_id=?)
+      ORDER BY category_path ASC, id ASC LIMIT 1
+    `).get(current.category_path, child.account_id)
+  }
+  if (!next) return { exhausted: true }
+  db.prepare('UPDATE children SET cursor_library_id=?, cursor_pdf=? WHERE id=?')
+    .run(next.id, next.filename, childId)
+  console.log(`[Rotation-1] cursor advanced child=${childId} → library_id=${next.id} (${next.filename})`)
+  return { next }
+}
+
 function getTodayPool(childId) {
-  const child = db.prepare('SELECT cursor_library_id, daily_count FROM children WHERE id = ?').get(childId);
-  if (!child || !child.cursor_library_id) return [];
-  const dailyCount = child.daily_count || 3;
-  // 按 pdf_library.id 顺序从 cursor 起取 dailyCount 本
-  // Sprint 0B 阶段：所有 children 都属于 account_id=1 + 所有 library 是 is_private=1 self-uploaded，无需跨账号过滤
-  // Phase 1（注册系统）时再加 account_id / is_private 过滤
-  const rows = db.prepare(`
-    SELECT id AS library_id, sha256, filename
-    FROM pdf_library
-    WHERE id >= ?
-    ORDER BY id
-    LIMIT ?
-  `).all(child.cursor_library_id, dailyCount);
-  return rows;
+  const child = db.prepare(`
+    SELECT cursor_library_id, daily_count, advance_after_reads, requires_recitation, account_id
+    FROM children WHERE id = ?
+  `).get(childId)
+  if (!child || !child.cursor_library_id) return []
+  const baseCount = child.daily_count || 3
+
+  // cursor 那本是否已达 advance_after_reads 且需要背诵（= 卡住等背诵）
+  const cursorCount = db.prepare('SELECT count FROM pdf_read_counts WHERE child_id=? AND library_id=?')
+    .get(childId, child.cursor_library_id)?.count || 0
+  const advanceThreshold = child.advance_after_reads || 5
+  const stuck = child.requires_recitation && cursorCount >= advanceThreshold
+  const limit = stuck ? baseCount + 1 : baseCount
+
+  // 按 (category_path, id) 从 cursor 起取 limit 本
+  const cursorLib = db.prepare('SELECT category_path, id FROM pdf_library WHERE id=?').get(child.cursor_library_id)
+  if (!cursorLib) return []
+  return db.prepare(`
+    SELECT id AS library_id, sha256, filename, category_path FROM pdf_library
+    WHERE (category_path > ?
+       OR (category_path = ? AND id >= ?))
+      AND (is_private=0 OR uploader_account_id=?)
+    ORDER BY category_path ASC, id ASC LIMIT ?
+  `).all(cursorLib.category_path, cursorLib.category_path, cursorLib.id, child.account_id, limit)
 }
 
 function getConfig() {
@@ -341,13 +380,20 @@ app.get('/api/children/:id', (req, res) => {
 app.get('/api/children/:id/pool', (req, res) => {
   try {
     const childId = req.params.id;
-    const pool = getTodayPool(childId).map((p, i) => ({
-      id: i,
-      child_id: childId,
-      library_id: p.library_id,        // 新主字段
-      sha256: p.sha256,
-      pdf_filename: p.filename,        // 兼容字段（旧前端逻辑还会用，显示用）
-    }));
+    const pool = getTodayPool(childId).map((p, i) => {
+      const rc = db.prepare('SELECT count FROM pdf_read_counts WHERE child_id=? AND library_id=?')
+        .get(childId, p.library_id)
+      const child = db.prepare('SELECT advance_after_reads FROM children WHERE id=?').get(childId)
+      return {
+        id: i,
+        child_id: childId,
+        library_id: p.library_id,
+        sha256: p.sha256,
+        pdf_filename: p.filename,
+        read_count: rc?.count ?? 0,
+        advance_after_reads: child?.advance_after_reads ?? 5,
+      }
+    });
     res.json(pool);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1079,26 +1125,23 @@ app.post('/api/admin/sessions/:id/review', requireParent, (req, res) => {
     db.prepare('UPDATE reading_sessions SET status = ? WHERE id = ?').run(status, sessionId)
     const session = db.prepare('SELECT * FROM reading_sessions WHERE id = ?').get(sessionId)
 
-    // Recitation: advance cursor on pass, mark plan on redo
+    // Recitation: advance cursor on pass (via advanceCursor), mark plan on redo
     if (sessionBefore && sessionBefore.session_type === 'recitation' && sessionBefore.plan_id) {
       if (decision === 'passed') {
         db.prepare("UPDATE recitation_plans SET status = 'passed' WHERE id = ?").run(sessionBefore.plan_id)
-        const plan = db.prepare('SELECT * FROM recitation_plans WHERE id = ?').get(sessionBefore.plan_id)
-        if (plan) {
-          // Sprint 0B: cursor 自动前进用 pdf_library.id 顺序，不再扫 NAS
-          const childRow = db.prepare('SELECT cursor_library_id, pdf_dir FROM children WHERE id = ?').get(session.child_id)
-          if (childRow && childRow.cursor_library_id) {
-            const next = db.prepare('SELECT id, filename FROM pdf_library WHERE id > ? ORDER BY id LIMIT 1').get(childRow.cursor_library_id)
-            if (next) {
-              db.prepare('UPDATE children SET cursor_library_id = ?, cursor_pdf = ? WHERE id = ?')
-                .run(next.id, next.filename, session.child_id)
-              console.log(`[Sprint 0B] cursor advanced child=${session.child_id} → library_id=${next.id} (${next.filename})`)
-            }
-          }
-        }
+        advanceCursor(session.child_id)
       } else if (decision === 'redo') {
         db.prepare("UPDATE recitation_plans SET status = 'retry' WHERE id = ?").run(sessionBefore.plan_id)
       }
+    }
+    // Reading redo: rollback pdf_read_counts for all books counted in this session
+    if (sessionBefore && sessionBefore.session_type === 'reading' && decision === 'redo') {
+      const marks = db.prepare('SELECT library_id FROM pdf_read_counts_session_mark WHERE session_id=?').all(sessionId)
+      for (const m of marks) {
+        db.prepare('UPDATE pdf_read_counts SET count=MAX(0,count-1), updated_at=datetime("now") WHERE child_id=? AND library_id=?')
+          .run(sessionBefore.child_id, m.library_id)
+      }
+      if (marks.length) console.log(`[Rotation-1] redo rolled back ${marks.length} book count(s) for session=${sessionId}`)
     }
 
     res.json(session)
@@ -1129,11 +1172,76 @@ app.get('/api/children/:id/history', (req, res) => {
 
 app.get('/api/children/:id/today-recitation', (req, res) => {
   try {
+    const childId = req.params.id
     const today = todayLocal()
-    const plan = db.prepare(
-      "SELECT id, pdf_filename, status FROM recitation_plans WHERE child_id = ? AND scheduled_date = ? AND status IN ('scheduled', 'retry') ORDER BY id ASC LIMIT 1"
-    ).get(req.params.id, today)
-    res.json(plan ?? null)
+    // 1. 取任何 active plan（不再限今天日期）
+    let plan = db.prepare(
+      "SELECT * FROM recitation_plans WHERE child_id=? AND status IN ('scheduled','retry') ORDER BY id ASC LIMIT 1"
+    ).get(childId)
+    if (plan) return res.json(plan)
+
+    // 2. 惰性生成：auto 模式 + 今天是 weekday + cursor 那本 count >= advance_after_reads
+    const child = db.prepare(`
+      SELECT cursor_library_id, requires_recitation, recitation_mode, recitation_weekday, advance_after_reads, account_id
+      FROM children WHERE id=?
+    `).get(childId)
+    if (!child || !child.requires_recitation || child.recitation_mode !== 'auto') {
+      return res.json(null)
+    }
+    const todayWd = new Date().getDay()  // 0=Sun..6=Sat
+    if (todayWd !== (child.recitation_weekday ?? 5)) return res.json(null)
+    if (!child.cursor_library_id) return res.json(null)
+    const cursorCount = db.prepare('SELECT count FROM pdf_read_counts WHERE child_id=? AND library_id=?')
+      .get(childId, child.cursor_library_id)?.count || 0
+    if (cursorCount < (child.advance_after_reads || 5)) return res.json(null)
+
+    // 生成 plan
+    const lib = db.prepare('SELECT id, filename FROM pdf_library WHERE id=?').get(child.cursor_library_id)
+    if (!lib) return res.json(null)
+    const result = db.prepare(
+      "INSERT INTO recitation_plans (child_id, pdf_library_id, pdf_filename, scheduled_date, status, account_id, auto) VALUES (?,?,?,?,'scheduled',?,1)"
+    ).run(childId, lib.id, lib.filename, today, child.account_id)
+    plan = db.prepare('SELECT * FROM recitation_plans WHERE id=?').get(result.lastInsertRowid)
+    console.log(`[Rotation-1] auto plan generated child=${childId} library_id=${lib.id} plan_id=${plan.id}`)
+    res.json(plan)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Sprint Rotation-1 M2: 倒数第 3 页停留 ≥ 1 秒 → 计数 +1
+app.post('/api/sessions/:id/page-dwelled', (req, res) => {
+  try {
+    const sessionId = parseInt(req.params.id)
+    const { pdf_library_id, page_number, total_pages, dwell_ms } = req.body
+    if (!pdf_library_id || !page_number || !total_pages || dwell_ms === undefined) {
+      return res.status(400).json({ error: 'pdf_library_id, page_number, total_pages, dwell_ms required' })
+    }
+    // 未达条件 → 直接返回 counted=false
+    if (page_number < total_pages - 2 || dwell_ms < 1000) {
+      return res.json({ counted: false, new_count: null })
+    }
+    const session = db.prepare('SELECT child_id FROM reading_sessions WHERE id=?').get(sessionId)
+    if (!session) return res.status(404).json({ error: 'session not found' })
+    const childId = session.child_id
+    // 去重：同 session 同 library 只计一次
+    const alreadyMarked = db.prepare('SELECT 1 FROM pdf_read_counts_session_mark WHERE session_id=? AND library_id=?')
+      .get(sessionId, pdf_library_id)
+    if (alreadyMarked) {
+      const rc = db.prepare('SELECT count FROM pdf_read_counts WHERE child_id=? AND library_id=?').get(childId, pdf_library_id)
+      return res.json({ counted: false, new_count: rc?.count ?? 0 })
+    }
+    // 标记 + 计数 +1
+    db.prepare('INSERT OR IGNORE INTO pdf_read_counts_session_mark (session_id, library_id) VALUES (?,?)')
+      .run(sessionId, pdf_library_id)
+    db.prepare(`
+      INSERT INTO pdf_read_counts (child_id, library_id, count, updated_at)
+      VALUES (?, ?, 1, datetime('now'))
+      ON CONFLICT(child_id, library_id) DO UPDATE SET count=count+1, updated_at=datetime('now')
+    `).run(childId, pdf_library_id)
+    const rc = db.prepare('SELECT count FROM pdf_read_counts WHERE child_id=? AND library_id=?').get(childId, pdf_library_id)
+    console.log(`[Rotation-1] page-dwelled counted child=${childId} library_id=${pdf_library_id} new_count=${rc.count}`)
+    res.json({ counted: true, new_count: rc.count })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
@@ -1285,18 +1393,41 @@ app.post('/api/recitation/:id/complete-chunked', multerNone, (req, res) => {
 
 app.post('/api/admin/recitation/schedule', requireParent, (req, res) => {
   try {
-    const { child_id, pdf_filename, scheduled_date } = req.body
-    if (!child_id || !pdf_filename || !scheduled_date) {
-      return res.status(400).json({ error: 'child_id, pdf_filename, scheduled_date required' })
+    const { child_id, pdf_filename, pdf_library_id, scheduled_date } = req.body
+    if (!child_id || (!pdf_filename && !pdf_library_id) || !scheduled_date) {
+      return res.status(400).json({ error: 'child_id, (pdf_filename or pdf_library_id), scheduled_date required' })
     }
     if (!db.prepare('SELECT 1 FROM children WHERE id = ? AND account_id = ?').get(child_id, req.accountId)) {
       return res.status(404).json({ error: 'child not found' })
     }
+    let libId = pdf_library_id ?? null
+    let libFilename = pdf_filename ?? null
+    if (libId) {
+      const lib = db.prepare('SELECT id, filename FROM pdf_library WHERE id=?').get(libId)
+      if (!lib) return res.status(400).json({ error: 'invalid pdf_library_id' })
+      libFilename = libFilename ?? lib.filename
+    }
     const result = db.prepare(
-      "INSERT INTO recitation_plans (child_id, pdf_filename, scheduled_date, status, account_id) VALUES (?, ?, ?, 'scheduled', ?)"
-    ).run(child_id, pdf_filename, scheduled_date, req.accountId)
+      "INSERT INTO recitation_plans (child_id, pdf_library_id, pdf_filename, scheduled_date, status, account_id, auto) VALUES (?,?,?,?,'scheduled',?,0)"
+    ).run(child_id, libId, libFilename, scheduled_date, req.accountId)
     const plan = db.prepare('SELECT * FROM recitation_plans WHERE id = ?').get(result.lastInsertRowid)
     res.json(plan)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.post('/api/admin/recitation/:planId/cancel', requireParent, (req, res) => {
+  try {
+    const planId = parseInt(req.params.planId)
+    const plan = db.prepare('SELECT * FROM recitation_plans WHERE id=? AND account_id=?').get(planId, req.accountId)
+    if (!plan) return res.status(404).json({ error: 'plan not found' })
+    if (!['scheduled', 'retry'].includes(plan.status)) {
+      return res.status(400).json({ error: 'can only cancel scheduled or retry plans' })
+    }
+    db.prepare("DELETE FROM recitation_plans WHERE id=? AND account_id=? AND status IN ('scheduled','retry')")
+      .run(planId, req.accountId)
+    res.json({ ok: true })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
@@ -1380,11 +1511,12 @@ app.delete('/api/admin/children/:id', requireParent, (req, res) => {
 
 app.post('/api/admin/pool/configure', requireParent, (req, res) => {
   try {
-    const { child_id, cursor_library_id, daily_count, min_duration_s } = req.body
+    const {
+      child_id, cursor_library_id, daily_count, min_duration_s,
+      time_window_start, time_window_end,
+      advance_after_reads, requires_recitation, recitation_mode, recitation_weekday,
+    } = req.body
     if (!child_id) return res.status(400).json({ error: 'child_id required' })
-    if (cursor_library_id === undefined && daily_count === undefined && min_duration_s === undefined) {
-      return res.status(400).json({ error: 'at least one field required' })
-    }
     if (!db.prepare('SELECT 1 FROM children WHERE id = ? AND account_id = ?').get(child_id, req.accountId)) {
       return res.status(404).json({ error: 'child not found' })
     }
@@ -1403,13 +1535,59 @@ app.post('/api/admin/pool/configure', requireParent, (req, res) => {
       return res.status(400).json({ error: 'daily_count must be 1-10' })
     }
 
+    // advance_after_reads 验证（≥ daily_count）
+    const advVal = advance_after_reads !== undefined ? parseInt(advance_after_reads) : null
+    if (advVal !== null) {
+      const effectiveDailyCount = countVal ?? db.prepare('SELECT daily_count FROM children WHERE id=?').get(child_id)?.daily_count ?? 3
+      if (isNaN(advVal) || advVal < effectiveDailyCount || advVal > 100) {
+        return res.status(400).json({ error: `advance_after_reads must be >= daily_count (${effectiveDailyCount}) and <= 100` })
+      }
+    }
+
+    // recitation_mode 验证
+    if (recitation_mode !== undefined && !['auto', 'manual'].includes(recitation_mode)) {
+      return res.status(400).json({ error: 'recitation_mode must be auto or manual' })
+    }
+    // recitation_weekday 验证
+    const wdVal = recitation_weekday !== undefined ? parseInt(recitation_weekday) : null
+    if (wdVal !== null && (isNaN(wdVal) || wdVal < 0 || wdVal > 6)) {
+      return res.status(400).json({ error: 'recitation_weekday must be 0-6' })
+    }
+    // time HH:MM 验证
+    const timeRe = /^\d{2}:\d{2}$/
+    if (time_window_start !== undefined && time_window_start !== null && !timeRe.test(time_window_start)) {
+      return res.status(400).json({ error: 'time_window_start must be HH:MM' })
+    }
+    if (time_window_end !== undefined && time_window_end !== null && !timeRe.test(time_window_end)) {
+      return res.status(400).json({ error: 'time_window_end must be HH:MM' })
+    }
+    // requires_recitation 验证（0 或 1）
+    const rrVal = requires_recitation !== undefined ? (requires_recitation ? 1 : 0) : null
+
     db.prepare(`
       UPDATE children SET
-        cursor_library_id = CASE WHEN ? IS NOT NULL THEN ? ELSE cursor_library_id END,
-        cursor_pdf        = CASE WHEN ? IS NOT NULL THEN ? ELSE cursor_pdf END,
-        daily_count       = CASE WHEN ? IS NOT NULL THEN ? ELSE daily_count END
+        cursor_library_id   = CASE WHEN ? IS NOT NULL THEN ? ELSE cursor_library_id END,
+        cursor_pdf          = CASE WHEN ? IS NOT NULL THEN ? ELSE cursor_pdf END,
+        daily_count         = CASE WHEN ? IS NOT NULL THEN ? ELSE daily_count END,
+        advance_after_reads = CASE WHEN ? IS NOT NULL THEN ? ELSE advance_after_reads END,
+        requires_recitation = CASE WHEN ? IS NOT NULL THEN ? ELSE requires_recitation END,
+        recitation_mode     = CASE WHEN ? IS NOT NULL THEN ? ELSE recitation_mode END,
+        recitation_weekday  = CASE WHEN ? IS NOT NULL THEN ? ELSE recitation_weekday END,
+        time_window_start   = CASE WHEN ? IS NOT NULL THEN ? ELSE time_window_start END,
+        time_window_end     = CASE WHEN ? IS NOT NULL THEN ? ELSE time_window_end END
       WHERE id = ? AND account_id = ?
-    `).run(cursorLibId, cursorLibId, cursorFilename, cursorFilename, countVal, countVal, child_id, req.accountId)
+    `).run(
+      cursorLibId, cursorLibId,
+      cursorFilename, cursorFilename,
+      countVal, countVal,
+      advVal, advVal,
+      rrVal, rrVal,
+      recitation_mode ?? null, recitation_mode ?? null,
+      wdVal, wdVal,
+      time_window_start ?? null, time_window_start ?? null,
+      time_window_end ?? null, time_window_end ?? null,
+      child_id, req.accountId
+    )
 
     if (min_duration_s !== undefined) {
       const durVal = min_duration_s === null ? null : parseInt(min_duration_s)
