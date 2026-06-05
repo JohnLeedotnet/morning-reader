@@ -37,6 +37,7 @@ interface RecPlan {
   pdf_filename: string
   scheduled_date: string
   status: string
+  auto: number
 }
 
 interface LibraryItem {
@@ -51,6 +52,8 @@ interface LibraryItem {
 }
 
 interface Category { path: string; count: number }
+
+const WEEKDAY_NAMES = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
 
 const REC_STATUS: Record<string, { label: string; cls: string }> = {
   scheduled: { label: '已安排',       cls: 'bg-blue-100 text-blue-700' },
@@ -488,32 +491,39 @@ function AddPdfModal({ childName, onAdd, onClose }: {
   )
 }
 
-// ── Pool child card ───────────────────────────────────────────────────────────
+// ── Exam config card（考核计划 tab 顶部）──────────────────────────────────────
 
-function PoolChildCard({ childName, cursor, cursorFilename, count, minDurationMin, onChangeCursor, onChangeCount, onChangeMinDuration, onSave, saving }: {
-  childName: string
-  cursor: number | null
+interface ExamLocalData {
+  cursorId: number | null
   cursorFilename: string | null
   count: number
   minDurationMin: string
+  timeWindowStart: string
+  timeWindowEnd: string
+  advanceAfterReads: number
+  requiresRecitation: boolean
+  recitationMode: 'auto' | 'manual'
+  recitationWeekday: number
+}
+
+function ChildExamConfigCard({ child, localData, onChangeCursor, onChange, onSave, saving }: {
+  child: { id: string; name: string }
+  localData: ExamLocalData
   onChangeCursor: () => void
-  onChangeCount: (n: number) => void
-  onChangeMinDuration: (v: string) => void
+  onChange: (field: keyof ExamLocalData, value: ExamLocalData[keyof ExamLocalData]) => void
   onSave: () => void
   saving: boolean
 }) {
-  const effectiveMin = minDurationMin ? parseInt(minDurationMin) : 5
-
   return (
     <div className="bg-white rounded-[20px] p-5 shadow-[0_4px_24px_rgba(224,122,95,0.08)]">
-      <h3 className="text-xl font-extrabold text-brown-text mb-4">{childName}</h3>
+      <h3 className="text-xl font-extrabold text-brown-text mb-4">{child.name}</h3>
 
       <p className="text-sm font-extrabold text-brown-text mb-1.5">起点 PDF</p>
       <div className="bg-cream rounded-[10px] p-3 mb-2">
-        {cursor && cursorFilename ? (
+        {localData.cursorId && localData.cursorFilename ? (
           <>
-            <p className="font-extrabold text-brown-text text-sm truncate">{cursorFilename}</p>
-            <p className="text-xs text-brown-mute mt-0.5">library_id={cursor}</p>
+            <p className="font-extrabold text-brown-text text-sm truncate">{localData.cursorFilename}</p>
+            <p className="text-xs text-brown-mute mt-0.5">library_id={localData.cursorId}</p>
           </>
         ) : (
           <p className="text-brown-mute text-sm">未配置</p>
@@ -525,30 +535,87 @@ function PoolChildCard({ childName, cursor, cursorFilename, count, minDurationMi
         更换起点
       </button>
 
-      <div className="flex items-center gap-3 mb-4">
-        <p className="text-sm font-extrabold text-brown-text">每日朗读本数</p>
-        <input
-          type="number" min={1} max={10} value={count}
-          onChange={e => onChangeCount(Math.min(10, Math.max(1, parseInt(e.target.value) || 1)))}
+      <div className="flex items-center gap-3 mb-3">
+        <p className="text-sm font-extrabold text-brown-text w-32 shrink-0">每日朗读本数</p>
+        <input type="number" min={1} max={10} value={localData.count}
+          onChange={e => onChange('count', Math.min(10, Math.max(1, parseInt(e.target.value) || 1)))}
           className="w-16 text-center text-lg font-extrabold bg-cream rounded-[10px] p-2
-            border-2 border-transparent focus:border-peach outline-none transition-colors text-brown-text"
-        />
+            border-2 border-transparent focus:border-peach outline-none transition-colors text-brown-text" />
       </div>
 
-      <div className="flex items-center gap-3 mb-4">
-        <p className="text-sm font-extrabold text-brown-text">朗读时长要求</p>
-        <input
-          type="number" min={1} max={60} value={minDurationMin}
-          onChange={e => onChangeMinDuration(e.target.value)}
+      <div className="flex items-center gap-3 mb-3">
+        <p className="text-sm font-extrabold text-brown-text w-32 shrink-0">每次朗读时长</p>
+        <input type="number" min={1} max={60} value={localData.minDurationMin}
+          onChange={e => onChange('minDurationMin', e.target.value)}
           placeholder="默认 5"
           className="w-16 text-center text-lg font-extrabold bg-cream rounded-[10px] p-2
-            border-2 border-transparent focus:border-peach outline-none transition-colors text-brown-text"
-        />
-        <p className="text-sm text-brown-mute">分钟（留空使用默认 {effectiveMin} 分钟）</p>
+            border-2 border-transparent focus:border-peach outline-none transition-colors text-brown-text" />
+        <p className="text-sm text-brown-mute">分钟</p>
       </div>
 
+      <div className="flex items-center gap-3 mb-3 flex-wrap">
+        <p className="text-sm font-extrabold text-brown-text w-32 shrink-0">考核时间窗</p>
+        <input type="time" value={localData.timeWindowStart}
+          onChange={e => onChange('timeWindowStart', e.target.value)}
+          className="bg-cream rounded-[10px] px-3 py-2 text-sm font-extrabold text-brown-text
+            border-2 border-transparent focus:border-peach outline-none" />
+        <span className="text-brown-mute text-sm">—</span>
+        <input type="time" value={localData.timeWindowEnd}
+          onChange={e => onChange('timeWindowEnd', e.target.value)}
+          className="bg-cream rounded-[10px] px-3 py-2 text-sm font-extrabold text-brown-text
+            border-2 border-transparent focus:border-peach outline-none" />
+      </div>
+
+      <div className="flex items-center gap-3 mb-3">
+        <p className="text-sm font-extrabold text-brown-text w-32 shrink-0">自动毕业次数</p>
+        <input type="number" min={1} max={99} value={localData.advanceAfterReads}
+          onChange={e => onChange('advanceAfterReads', Math.max(1, parseInt(e.target.value) || 1))}
+          className="w-16 text-center text-lg font-extrabold bg-cream rounded-[10px] p-2
+            border-2 border-transparent focus:border-peach outline-none transition-colors text-brown-text" />
+        <p className="text-sm text-brown-mute">次后进入背诵</p>
+      </div>
+
+      <div className="flex items-center gap-3 mb-3">
+        <p className="text-sm font-extrabold text-brown-text w-32 shrink-0">需要背诵</p>
+        <button
+          onClick={() => onChange('requiresRecitation', !localData.requiresRecitation)}
+          className={`relative w-11 h-6 rounded-full transition-colors shrink-0
+            ${localData.requiresRecitation ? 'bg-mint' : 'bg-[#C8B4A0]'}`}>
+          <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform
+            ${localData.requiresRecitation ? 'translate-x-5' : 'translate-x-0.5'}`} />
+        </button>
+      </div>
+
+      {localData.requiresRecitation && (
+        <div className="flex items-center gap-4 mb-3 ml-36">
+          {(['auto', 'manual'] as const).map(m => (
+            <label key={m} className="flex items-center gap-1.5 cursor-pointer">
+              <input type="radio" name={`recMode-${child.id}`} value={m}
+                checked={localData.recitationMode === m}
+                onChange={() => onChange('recitationMode', m)}
+                className="accent-[#E07A5F]" />
+              <span className="text-sm text-brown-text font-bold">{m === 'auto' ? '自动安排' : '手动安排'}</span>
+            </label>
+          ))}
+        </div>
+      )}
+
+      {localData.requiresRecitation && localData.recitationMode === 'auto' && (
+        <div className="flex items-center gap-3 mb-3">
+          <p className="text-sm font-extrabold text-brown-text w-32 shrink-0">背诵日</p>
+          <select value={localData.recitationWeekday}
+            onChange={e => onChange('recitationWeekday', parseInt(e.target.value))}
+            className="bg-cream rounded-[10px] px-3 py-2 text-sm font-extrabold text-brown-text
+              border-2 border-transparent focus:border-peach outline-none">
+            {WEEKDAY_NAMES.map((name, i) => (
+              <option key={i} value={i}>{name}</option>
+            ))}
+          </select>
+        </div>
+      )}
+
       <button onClick={onSave} disabled={saving}
-        className="bg-peach text-white py-2.5 px-5 rounded-[12px] font-extrabold w-full
+        className="bg-peach text-white py-2.5 px-5 rounded-[12px] font-extrabold w-full mt-2
           hover:opacity-90 transition-opacity disabled:opacity-40">
         {saving ? '保存中...' : '保存配置'}
       </button>
@@ -992,23 +1059,36 @@ export default function ParentPage() {
   const [selectMode,   setSelectMode]   = useState(false)
 
   // Pool state
-  const [allChildren,        setAllChildren]        = useState<{id: string; name: string; age?: number; daily_count?: number; min_duration_s?: number | null; cursor_library_id?: number | null; cursor_filename?: string | null}[]>([])
-  const [localCursorIds,     setLocalCursorIds]     = useState<Record<string, number | null>>({})
+  const [allChildren,        setAllChildren]        = useState<{
+    id: string; name: string; age?: number; daily_count?: number; min_duration_s?: number | null
+    cursor_library_id?: number | null; cursor_filename?: string | null
+    advance_after_reads?: number | null; requires_recitation?: number | null
+    recitation_mode?: string | null; recitation_weekday?: number | null
+    time_window_start?: string | null; time_window_end?: string | null
+  }[]>([])
+  const [localCursorIds,       setLocalCursorIds]       = useState<Record<string, number | null>>({})
   const [localCursorFilenames, setLocalCursorFilenames] = useState<Record<string, string | null>>({})
-  const [localCounts,        setLocalCounts]        = useState<Record<string, number>>({})
-  const [localMinDurations,  setLocalMinDurations]  = useState<Record<string, string>>({})
-  const [loadingPool,        setLoadingPool]        = useState(false)
-  const [savingChild,        setSavingChild]        = useState<string | null>(null)
-  const [poolModal,          setPoolModal]          = useState<string | null>(null) // childId
-  const [addUserOpen,        setAddUserOpen]        = useState(false)
-  const [newUserName,        setNewUserName]        = useState('')
-  const [newUserAge,         setNewUserAge]         = useState('')
+  const [localCounts,          setLocalCounts]          = useState<Record<string, number>>({})
+  const [localMinDurations,    setLocalMinDurations]    = useState<Record<string, string>>({})
+  const [localAdvanceReads,    setLocalAdvanceReads]    = useState<Record<string, number>>({})
+  const [localRequiresRec,     setLocalRequiresRec]     = useState<Record<string, boolean>>({})
+  const [localRecMode,         setLocalRecMode]         = useState<Record<string, 'auto' | 'manual'>>({})
+  const [localRecWeekday,      setLocalRecWeekday]      = useState<Record<string, number>>({})
+  const [localTimeStart,       setLocalTimeStart]       = useState<Record<string, string>>({})
+  const [localTimeEnd,         setLocalTimeEnd]         = useState<Record<string, string>>({})
+  const [loadingPool,          setLoadingPool]          = useState(false)
+  const [savingChild,          setSavingChild]          = useState<string | null>(null)
+  const [poolModal,            setPoolModal]            = useState<string | null>(null) // childId
+  const [addUserOpen,          setAddUserOpen]          = useState(false)
+  const [newUserName,          setNewUserName]          = useState('')
+  const [newUserAge,           setNewUserAge]           = useState('')
 
   // Recitation state
   const [recPlans,      setRecPlans]      = useState<RecPlan[]>([])
   const [loadingRec,    setLoadingRec]    = useState(false)
   const [recChildId,    setRecChildId]    = useState('')
   const [recPdf,        setRecPdf]        = useState<string | null>(null)
+  const [recLibraryId,  setRecLibraryId]  = useState<number | null>(null)
   const [recDate,       setRecDate]       = useState('')
   const [schedulingRec, setSchedulingRec] = useState(false)
   const [recModal,      setRecModal]      = useState(false)
@@ -1041,7 +1121,14 @@ export default function ParentPage() {
   useEffect(() => {
     if (view !== 'dashboard') return
     fetch('/api/children').then(r => r.json())
-      .then((data: any[]) => setAllChildren(data.map(c => ({ id: c.id, name: c.name, age: c.age, daily_count: c.daily_count, min_duration_s: c.min_duration_s, cursor_library_id: c.cursor_library_id ?? null, cursor_filename: c.cursor_filename ?? null }))))
+      .then((data: any[]) => setAllChildren(data.map(c => ({
+        id: c.id, name: c.name, age: c.age, daily_count: c.daily_count,
+        min_duration_s: c.min_duration_s,
+        cursor_library_id: c.cursor_library_id ?? null, cursor_filename: c.cursor_filename ?? null,
+        advance_after_reads: c.advance_after_reads ?? null, requires_recitation: c.requires_recitation ?? null,
+        recitation_mode: c.recitation_mode ?? null, recitation_weekday: c.recitation_weekday ?? null,
+        time_window_start: c.time_window_start ?? null, time_window_end: c.time_window_end ?? null,
+      }))))
       .catch(() => {})
   }, [view])
 
@@ -1060,10 +1147,11 @@ export default function ParentPage() {
     refreshChildConfigs()
   }, [view, tab])
 
-  // Load recitation plans when on recitation tab
+  // Load recitation plans and child configs when on recitation tab
   useEffect(() => {
     if (view !== 'dashboard' || tab !== 'recitation') return
     refreshRecPlans()
+    refreshChildConfigs()
   }, [view, tab])
 
   // Clear selection when filters change
@@ -1086,23 +1174,45 @@ export default function ParentPage() {
         min_duration_s: c.min_duration_s,
         cursor_library_id: c.cursor_library_id ?? null,
         cursor_filename: c.cursor_filename ?? null,
+        advance_after_reads: c.advance_after_reads ?? null,
+        requires_recitation: c.requires_recitation ?? null,
+        recitation_mode: c.recitation_mode ?? null,
+        recitation_weekday: c.recitation_weekday ?? null,
+        time_window_start: c.time_window_start ?? null,
+        time_window_end: c.time_window_end ?? null,
       })))
-      const cursorIds:  Record<string, number | null> = {}
-      const cursorFns:  Record<string, string | null> = {}
-      const counts:     Record<string, number>        = {}
-      const durations:  Record<string, string>        = {}
+      const cursorIds:   Record<string, number | null>    = {}
+      const cursorFns:   Record<string, string | null>    = {}
+      const counts:      Record<string, number>           = {}
+      const durations:   Record<string, string>           = {}
+      const advReads:    Record<string, number>           = {}
+      const reqRec:      Record<string, boolean>          = {}
+      const recModes:    Record<string, 'auto'|'manual'>  = {}
+      const recWeekdays: Record<string, number>           = {}
+      const timeStarts:  Record<string, string>           = {}
+      const timeEnds:    Record<string, string>           = {}
       results.forEach(c => {
-        cursorIds[c.id]  = c.cursor_library_id ?? null
-        cursorFns[c.id]  = c.cursor_filename ?? null
-        counts[c.id]     = c.daily_count ?? 3
-        durations[c.id]  = c.min_duration_s != null
-          ? String(Math.round(c.min_duration_s / 60))
-          : ''
+        cursorIds[c.id]   = c.cursor_library_id ?? null
+        cursorFns[c.id]   = c.cursor_filename ?? null
+        counts[c.id]      = c.daily_count ?? 3
+        durations[c.id]   = c.min_duration_s != null ? String(Math.round(c.min_duration_s / 60)) : ''
+        advReads[c.id]    = c.advance_after_reads ?? 5
+        reqRec[c.id]      = (c.requires_recitation ?? 1) !== 0
+        recModes[c.id]    = (c.recitation_mode ?? 'auto') === 'manual' ? 'manual' : 'auto'
+        recWeekdays[c.id] = c.recitation_weekday ?? 5
+        timeStarts[c.id]  = c.time_window_start ?? '07:00'
+        timeEnds[c.id]    = c.time_window_end ?? '08:00'
       })
       setLocalCursorIds(cursorIds)
       setLocalCursorFilenames(cursorFns)
       setLocalCounts(counts)
       setLocalMinDurations(durations)
+      setLocalAdvanceReads(advReads)
+      setLocalRequiresRec(reqRec)
+      setLocalRecMode(recModes)
+      setLocalRecWeekday(recWeekdays)
+      setLocalTimeStart(timeStarts)
+      setLocalTimeEnd(timeEnds)
     } finally {
       setLoadingPool(false)
     }
@@ -1124,6 +1234,12 @@ export default function ParentPage() {
           cursor_library_id: localCursorIds[childId] ?? null,
           daily_count: localCounts[childId],
           min_duration_s,
+          advance_after_reads: localAdvanceReads[childId] ?? undefined,
+          requires_recitation: localRequiresRec[childId] !== undefined ? (localRequiresRec[childId] ? 1 : 0) : undefined,
+          recitation_mode: localRecMode[childId] ?? undefined,
+          recitation_weekday: localRecWeekday[childId] ?? undefined,
+          time_window_start: localTimeStart[childId] || null,
+          time_window_end: localTimeEnd[childId] || null,
         }),
       })
       if (!res.ok) { alert('保存失败'); return }
@@ -1169,10 +1285,16 @@ export default function ParentPage() {
     try {
       const res = await adminFetch('/api/admin/recitation/schedule', {
         method: 'POST',
-        body: JSON.stringify({ child_id: recChildId, pdf_filename: recPdf, scheduled_date: recDate }),
+        body: JSON.stringify({
+          child_id: recChildId,
+          pdf_filename: recPdf,
+          pdf_library_id: recLibraryId,
+          scheduled_date: recDate,
+        }),
       })
       if (!res.ok) { alert('安排失败'); return }
       setRecPdf(null)
+      setRecLibraryId(null)
       setRecDate('')
       await refreshRecPlans()
     } finally {
@@ -1186,10 +1308,18 @@ export default function ParentPage() {
     setRecPlans(prev => prev.filter(p => p.id !== id))
   }
 
+  const handleCancelRecPlan = async (id: number) => {
+    if (!confirm('确认取消此考核计划？')) return
+    const res = await adminFetch(`/api/admin/recitation/${id}/cancel`, { method: 'POST' })
+    if (!res.ok) { alert('取消失败'); return }
+    setRecPlans(prev => prev.filter(p => p.id !== id))
+  }
+
   const handleOpenRecModal = () => { setRecModal(true) }
 
-  const handleSelectRecPdf = (_libraryId: number, filename: string) => {
+  const handleSelectRecPdf = (libraryId: number, filename: string) => {
     setRecPdf(filename)
+    setRecLibraryId(libraryId)
     setRecModal(false)
   }
 
@@ -1472,26 +1602,42 @@ export default function ParentPage() {
 
         {/* ── Pool tab ── */}
         {tab === 'pool' && (
-          <div className="space-y-6">
-            <h3 className="text-lg font-extrabold text-brown-text">书单设置</h3>
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-extrabold text-brown-text">书单管理</h3>
+              <button onClick={() => setTab('recitation')}
+                className="text-sm font-extrabold text-peach hover:underline">
+                去考核计划修改设置 →
+              </button>
+            </div>
             {loadingPool ? (
               <p className="text-brown-mute text-sm">加载中...</p>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {allChildren.map(c => (
-                  <PoolChildCard key={c.id}
-                    childName={c.name}
-                    cursor={localCursorIds[c.id] ?? c.cursor_library_id ?? null}
-                    cursorFilename={localCursorFilenames[c.id] !== undefined ? localCursorFilenames[c.id] : (c.cursor_filename ?? null)}
-                    count={localCounts[c.id] ?? 3}
-                    minDurationMin={localMinDurations[c.id] ?? ''}
-                    onChangeCursor={() => handleOpenPoolModal(c.id)}
-                    onChangeCount={n => setLocalCounts(prev => ({ ...prev, [c.id]: n }))}
-                    onChangeMinDuration={v => setLocalMinDurations(prev => ({ ...prev, [c.id]: v }))}
-                    onSave={() => handleSaveConfig(c.id)}
-                    saving={savingChild === c.id}
-                  />
-                ))}
+                {allChildren.map(c => {
+                  const cursorId = localCursorIds[c.id] ?? c.cursor_library_id ?? null
+                  const cursorFn = localCursorFilenames[c.id] !== undefined ? localCursorFilenames[c.id] : (c.cursor_filename ?? null)
+                  return (
+                    <div key={c.id} className="bg-white rounded-[20px] p-5 shadow-[0_4px_24px_rgba(224,122,95,0.08)]">
+                      <h3 className="text-lg font-extrabold text-brown-text mb-3">{c.name}</h3>
+                      <p className="text-sm font-extrabold text-brown-text mb-1.5">起点 PDF</p>
+                      <div className="bg-cream rounded-[10px] p-3">
+                        {cursorId && cursorFn ? (
+                          <>
+                            <p className="font-extrabold text-brown-text text-sm truncate">{cursorFn}</p>
+                            <p className="text-xs text-brown-mute mt-0.5">library_id={cursorId}</p>
+                          </>
+                        ) : (
+                          <p className="text-brown-mute text-sm">未配置</p>
+                        )}
+                      </div>
+                      <button onClick={() => setTab('recitation')}
+                        className="mt-3 text-sm font-extrabold text-peach hover:underline">
+                        去考核计划修改设置 →
+                      </button>
+                    </div>
+                  )
+                })}
               </div>
             )}
           </div>
@@ -1500,9 +1646,57 @@ export default function ParentPage() {
         {/* ── Recitation tab ── */}
         {tab === 'recitation' && (
           <div>
-            {/* Schedule form */}
+            {/* 角色考核设置 */}
+            {allChildren.length > 0 && (
+              <div className="mb-6">
+                <h3 className="text-lg font-extrabold text-brown-text mb-3">角色考核设置</h3>
+                {loadingPool ? (
+                  <p className="text-brown-mute text-sm">加载中...</p>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {allChildren.map(c => (
+                      <ChildExamConfigCard
+                        key={c.id}
+                        child={{ id: c.id, name: c.name }}
+                        localData={{
+                          cursorId: localCursorIds[c.id] ?? c.cursor_library_id ?? null,
+                          cursorFilename: localCursorFilenames[c.id] !== undefined
+                            ? localCursorFilenames[c.id]
+                            : (c.cursor_filename ?? null),
+                          count: localCounts[c.id] ?? 3,
+                          minDurationMin: localMinDurations[c.id] ?? '',
+                          timeWindowStart: localTimeStart[c.id] ?? '07:00',
+                          timeWindowEnd: localTimeEnd[c.id] ?? '08:00',
+                          advanceAfterReads: localAdvanceReads[c.id] ?? 5,
+                          requiresRecitation: localRequiresRec[c.id] !== undefined
+                            ? localRequiresRec[c.id]
+                            : (c.requires_recitation ?? 1) !== 0,
+                          recitationMode: localRecMode[c.id] ?? 'auto',
+                          recitationWeekday: localRecWeekday[c.id] ?? 5,
+                        }}
+                        onChangeCursor={() => handleOpenPoolModal(c.id)}
+                        onChange={(field, value) => {
+                          if (field === 'count') setLocalCounts(p => ({ ...p, [c.id]: value as number }))
+                          else if (field === 'minDurationMin') setLocalMinDurations(p => ({ ...p, [c.id]: value as string }))
+                          else if (field === 'timeWindowStart') setLocalTimeStart(p => ({ ...p, [c.id]: value as string }))
+                          else if (field === 'timeWindowEnd') setLocalTimeEnd(p => ({ ...p, [c.id]: value as string }))
+                          else if (field === 'advanceAfterReads') setLocalAdvanceReads(p => ({ ...p, [c.id]: value as number }))
+                          else if (field === 'requiresRecitation') setLocalRequiresRec(p => ({ ...p, [c.id]: value as boolean }))
+                          else if (field === 'recitationMode') setLocalRecMode(p => ({ ...p, [c.id]: value as 'auto'|'manual' }))
+                          else if (field === 'recitationWeekday') setLocalRecWeekday(p => ({ ...p, [c.id]: value as number }))
+                        }}
+                        onSave={() => handleSaveConfig(c.id)}
+                        saving={savingChild === c.id}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* 手动安排背诵 form */}
             <div className="bg-white rounded-[20px] p-5 shadow-[0_4px_24px_rgba(224,122,95,0.08)] mb-5">
-              <h3 className="font-extrabold text-brown-text mb-4">安排考核</h3>
+              <h3 className="font-extrabold text-brown-text mb-4">手动安排背诵</h3>
               <div className="flex flex-col gap-3">
                 <div>
                   <label className="text-sm font-extrabold text-brown-text mb-1.5 block">孩子</label>
@@ -1539,7 +1733,7 @@ export default function ParentPage() {
                 <button onClick={handleScheduleRecitation} disabled={schedulingRec}
                   className="bg-peach text-white py-2.5 px-5 rounded-[12px] font-extrabold w-full
                     hover:opacity-90 transition-opacity disabled:opacity-40">
-                  {schedulingRec ? '安排中...' : '📅 安排考核'}
+                  {schedulingRec ? '安排中...' : '📅 手动安排背诵'}
                 </button>
               </div>
             </div>
@@ -1555,12 +1749,17 @@ export default function ParentPage() {
               <div className="space-y-3">
                 {recPlans.map(plan => {
                   const si = REC_STATUS[plan.status] ?? { label: plan.status, cls: 'bg-[#F5E8DD] text-brown-faint' }
+                  const isActive = plan.status === 'scheduled' || plan.status === 'retry'
                   return (
                     <div key={plan.id}
                       className="bg-white rounded-[20px] p-4 shadow-[0_4px_24px_rgba(224,122,95,0.08)] flex items-center gap-3">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1 flex-wrap">
                           <span className="font-extrabold text-brown-text text-[15px]">{plan.child_name}</span>
+                          <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full
+                            ${plan.auto ? 'bg-blue-100 text-blue-700' : 'bg-[#F5E8DD] text-brown-text'}`}>
+                            {plan.auto ? '🤖 自动' : '👤 手动'}
+                          </span>
                           <span className="text-brown-mute text-[12px]">· {plan.scheduled_date}</span>
                           <span className={`text-[11px] font-extrabold px-2 py-0.5 rounded-full ${si.cls}`}>
                             {si.label}
@@ -1570,10 +1769,19 @@ export default function ParentPage() {
                           {plan.pdf_filename.split('/').pop()?.replace('.pdf', '')}
                         </p>
                       </div>
-                      <button onClick={() => handleDeleteRecPlan(plan.id)}
-                        className="text-red-400 hover:text-red-600 text-xl leading-none shrink-0 px-1">
-                        ×
-                      </button>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {isActive && (
+                          <button onClick={() => handleCancelRecPlan(plan.id)}
+                            className="text-[12px] font-extrabold text-orange-600 bg-orange-50
+                              hover:bg-orange-100 px-2.5 py-1 rounded-[8px] transition-colors">
+                            取消
+                          </button>
+                        )}
+                        <button onClick={() => handleDeleteRecPlan(plan.id)}
+                          className="text-red-400 hover:text-red-600 text-xl leading-none px-1">
+                          ×
+                        </button>
+                      </div>
                     </div>
                   )
                 })}
