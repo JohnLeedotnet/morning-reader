@@ -127,10 +127,6 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
   } | null>(null)
   const [, forceRerender] = useState(0)
 
-  // Resize (font_scale) state
-  const resizingRef = useRef<{ id: number; startClientX: number; startClientY: number; startScale: number } | null>(null)
-  const resizeVisualRef = useRef<{ id: number; scale: number } | null>(null)
-
   // Window size for stable, content-independent page width calculation
   const [winW, setWinW] = useState(window.innerWidth)
   const [winH, setWinH] = useState(window.innerHeight)
@@ -138,6 +134,7 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
   const [totalDurationS, setTotalDurationS] = useState(0)
   const [recordingStartTime, setRecordingStartTime] = useState<string | null>(null)
   const [syncOffsetMs, setSyncOffsetMs] = useState(0)
+  const [selectedAnnotId, setSelectedAnnotId] = useState<number | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const [containerW, setContainerW] = useState(0)
   const pdfDocOptions = useMemo(() => ({}), [])
@@ -225,14 +222,13 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
     setManualOverride(true)
   }
 
-  // 翻页或切 PDF 时自动清掉未提交的文字输入框
   useEffect(() => {
-    setPendingPos(null); setPendingText('')
+    setPendingPos(null); setPendingText(''); setSelectedAnnotId(null)
   }, [currentPage, activePdf])
 
-  // 切到非 text 工具时清掉未提交的文字输入框
   useEffect(() => {
     if (activeTool !== 'text') { setPendingPos(null); setPendingText('') }
+    if (activeTool) setSelectedAnnotId(null)
   }, [activeTool])
 
   const isNarrow = winW < 768
@@ -382,16 +378,6 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
       return { x: (clientX - r.left) / r.width, y: (clientY - r.top) / r.height }
     }
     const handleMove = (e: PointerEvent) => {
-      const resize = resizingRef.current
-      if (resize) {
-        const dx = e.clientX - resize.startClientX
-        const dy = e.clientY - resize.startClientY
-        const delta = (dx + dy) / 200
-        const newScale = Math.max(0.5, Math.min(2.0, resize.startScale + delta))
-        resizeVisualRef.current = { id: resize.id, scale: newScale }
-        forceRerender(n => n + 1)
-        return
-      }
       const drag = draggingRef.current
       if (!drag) return
       const dx = e.clientX - drag.startClientX
@@ -421,14 +407,6 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
       forceRerender(n => n + 1)
     }
     const handleUp = () => {
-      const resize = resizingRef.current
-      const rv = resizeVisualRef.current
-      if (resize && rv && Math.abs(rv.scale - resize.startScale) > 0.05) {
-        patchAnnotation(resize.id, { font_scale: rv.scale })
-      }
-      resizingRef.current = null
-      resizeVisualRef.current = null
-
       const drag = draggingRef.current
       const visual = dragVisualRef.current
       if (drag && visual && drag.movedPx > 5) {
@@ -536,42 +514,8 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
         </div>
       )}
 
-      {/* PDF viewer — 常态工具栏 + 容器 */}
+      {/* PDF viewer */}
       <div className="relative">
-        {/* 常态工具栏（右上角 3 个图标）*/}
-        {activeLibId && (
-          <div className="absolute top-2 right-2 z-20 bg-white/95 rounded-[10px] shadow-md p-1 flex gap-1">
-            <button title="文字" aria-label="文字"
-              onClick={() => { setActiveTool(t => t === 'text' ? null : 'text'); setDeleteMode(false); setEditingId(null) }}
-              className={`w-8 h-8 flex items-center justify-center rounded-md transition-colors
-                ${activeTool === 'text' ? 'bg-peach text-white' : 'text-brown-text hover:bg-cream'}`}>
-              <IconT />
-            </button>
-            <button title="手绘" aria-label="手绘"
-              onClick={() => { setActiveTool(t => t === 'draw' ? null : 'draw'); setDeleteMode(false); setEditingId(null) }}
-              className={`w-8 h-8 flex items-center justify-center rounded-md transition-colors
-                ${activeTool === 'draw' ? 'bg-peach text-white' : 'text-brown-text hover:bg-cream'}`}>
-              <IconPencil />
-            </button>
-            <button title="删除" aria-label="删除"
-              onClick={() => { setDeleteMode(d => !d); setActiveTool(null); setEditingId(null) }}
-              className={`w-8 h-8 flex items-center justify-center rounded-md transition-colors
-                ${deleteMode ? 'bg-red-500 text-white' : 'text-brown-text hover:bg-cream'}`}>
-              <IconTrash />
-            </button>
-          </div>
-        )}
-        {/* 色卡 sub-toolbar（仅文字工具激活时）*/}
-        {activeLibId && activeTool === 'text' && (
-          <div className="absolute top-12 right-2 z-20 bg-white/95 rounded-[10px] shadow-md p-1 flex gap-1">
-            {(['#E07A5F', '#C54B38', '#81B29A', '#4A90D9'] as const).map(c => (
-              <button key={c} onClick={() => setAnnotColor(c)} aria-label={`颜色 ${c}`}
-                className={`w-6 h-6 rounded-full border-2 ${annotColor === c ? 'border-brown-text' : 'border-transparent'}`}
-                style={{ background: c }} />
-            ))}
-          </div>
-        )}
-
         <div ref={containerRef}
              className="bg-cream-pdf rounded-[14px] overflow-hidden flex items-center justify-center p-2"
              onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
@@ -649,7 +593,8 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
                           placeholder="输入提示，回车保存…"
                           className="text-xs bg-white border-2 border-peach rounded px-2 py-1 shadow-lg w-40" />
                         <button type="button"
-                          onClick={() => { setPendingPos(null); setPendingText('') }}
+                          onPointerDown={e => e.stopPropagation()}
+                          onClick={e => { e.stopPropagation(); setPendingPos(null); setPendingText('') }}
                           className="w-5 h-5 rounded-full bg-white border-2 border-peach text-peach text-xs
                                      font-bold shadow flex items-center justify-center shrink-0"
                           aria-label="取消">×</button>
@@ -670,8 +615,8 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
                       ? dragVisualRef.current : null
                     const displayX = dragV ? dragV.x : a.pos_x!
                     const displayY = dragV ? dragV.y : a.pos_y!
-                    const vScale = resizeVisualRef.current?.id === a.id
-                      ? resizeVisualRef.current.scale : (a.font_scale ?? 1.0)
+                    const vScale = a.font_scale ?? 1.0
+                    const isSelected = selectedAnnotId === a.id
                     return (
                       <div key={a.id}
                         className="absolute z-[5] pointer-events-auto select-none"
@@ -685,7 +630,8 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
                         }}
                         onClick={e => {
                           e.stopPropagation()
-                          if (deleteMode) deleteAnnotation(a.id)
+                          if (deleteMode) { deleteAnnotation(a.id); return }
+                          setSelectedAnnotId(prev => prev === a.id ? null : a.id)
                         }}
                         onDoubleClick={e => {
                           e.stopPropagation()
@@ -709,33 +655,17 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
                             offsetNormY: normY - a.pos_y!,
                           }
                         }}>
-                        <span className="inline-block text-[11px] font-bold text-white px-2 py-0.5 rounded-full shadow-md whitespace-nowrap"
-                          style={{ background: a.color, position: 'relative',
-                                   outline: (!deleteMode && !activeTool) ? '1.5px dashed rgba(255,255,255,0.45)' : 'none',
-                                   outlineOffset: '2px' }}>
-                          {!deleteMode && !activeTool && (
-                            <span className="absolute -left-2 -top-2 w-4 h-4 bg-peach/80 rounded-full
-                                             flex items-center justify-center text-white text-[9px] shadow"
-                                  style={{ pointerEvents: 'none', lineHeight: 1 }}>
-                              ⠿
-                            </span>
-                          )}
+                        <span className="inline-block text-[11px] font-bold text-white px-2 py-0.5 rounded-full whitespace-nowrap"
+                          style={{
+                            background: a.color,
+                            position: 'relative',
+                            outline: isSelected ? '2px solid white' : (!deleteMode && !activeTool) ? '1.5px dashed rgba(255,255,255,0.45)' : 'none',
+                            outlineOffset: '2px',
+                            boxShadow: isSelected
+                              ? `0 0 0 4px ${a.color}, 0 4px 6px -1px rgba(0,0,0,0.15)`
+                              : '0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -2px rgba(0,0,0,0.1)',
+                          }}>
                           {deleteMode ? '🗑 ' : ''}{a.message}
-                          {!deleteMode && !activeTool && (
-                            <span
-                              className="absolute -right-2 -bottom-2 w-5 h-5 bg-peach border-2 border-white rounded-full
-                                         flex items-center justify-center text-white text-[10px] font-bold shadow-md"
-                              style={{ cursor: 'nwse-resize', pointerEvents: 'auto', touchAction: 'none' }}
-                              onPointerDown={e => {
-                                e.stopPropagation()
-                                resizingRef.current = {
-                                  id: a.id,
-                                  startClientX: e.clientX, startClientY: e.clientY,
-                                  startScale: a.font_scale ?? 1.0,
-                                }
-                              }}
-                            >↘</span>
-                          )}
                         </span>
                       </div>
                     )
@@ -796,6 +726,78 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
             </Document>
           )}
         </div>
+
+        {/* 底部 floating toolbar（主工具选择）*/}
+        {activeLibId && !selectedAnnotId && (
+          <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20
+                          bg-white rounded-[12px] shadow-md p-1 flex gap-1 items-center
+                          opacity-[0.85] hover:opacity-100 transition-opacity">
+            <button title="文字" aria-label="文字"
+              onClick={() => { setActiveTool(t => t === 'text' ? null : 'text'); setDeleteMode(false); setEditingId(null) }}
+              className={`w-8 h-8 flex items-center justify-center rounded-md transition-colors
+                ${activeTool === 'text' ? 'bg-peach text-white' : 'text-brown-text hover:bg-cream'}`}>
+              <IconT />
+            </button>
+            <button title="手绘" aria-label="手绘"
+              onClick={() => { setActiveTool(t => t === 'draw' ? null : 'draw'); setDeleteMode(false); setEditingId(null) }}
+              className={`w-8 h-8 flex items-center justify-center rounded-md transition-colors
+                ${activeTool === 'draw' ? 'bg-peach text-white' : 'text-brown-text hover:bg-cream'}`}>
+              <IconPencil />
+            </button>
+            <button title="删除批注" aria-label="删除批注"
+              onClick={() => { setDeleteMode(d => !d); setActiveTool(null); setEditingId(null) }}
+              className={`w-8 h-8 flex items-center justify-center rounded-md transition-colors
+                ${deleteMode ? 'bg-red-500 text-white' : 'text-brown-text hover:bg-cream'}`}>
+              <IconTrash />
+            </button>
+            {activeTool === 'text' && (
+              <>
+                <div className="w-px h-5 bg-cream-card mx-0.5" />
+                {(['#E07A5F', '#C54B38', '#81B29A', '#4A90D9'] as const).map(c => (
+                  <button key={c} onClick={() => setAnnotColor(c)} aria-label={`颜色 ${c}`}
+                    className={`w-5 h-5 rounded-full border-2 ${annotColor === c ? 'border-brown-text' : 'border-transparent'}`}
+                    style={{ background: c }} />
+                ))}
+              </>
+            )}
+          </div>
+        )}
+
+        {/* 选中批注 action bar */}
+        {activeLibId && selectedAnnotId && (
+          <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20
+                          bg-white rounded-[12px] shadow-md p-1 flex gap-1 items-center">
+            <button title="放大文字"
+              onClick={() => {
+                const a = annotations.find(x => x.id === selectedAnnotId)
+                if (!a) return
+                patchAnnotation(selectedAnnotId, { font_scale: Math.min(2.0, (a.font_scale ?? 1.0) + 0.15) })
+              }}
+              className="w-8 h-8 flex items-center justify-center rounded-md text-brown-text hover:bg-cream font-bold text-sm">
+              A⁺
+            </button>
+            <button title="缩小文字"
+              onClick={() => {
+                const a = annotations.find(x => x.id === selectedAnnotId)
+                if (!a) return
+                patchAnnotation(selectedAnnotId, { font_scale: Math.max(0.5, (a.font_scale ?? 1.0) - 0.15) })
+              }}
+              className="w-8 h-8 flex items-center justify-center rounded-md text-brown-text hover:bg-cream font-bold text-sm">
+              A⁻
+            </button>
+            <div className="w-px h-5 bg-cream-card mx-0.5" />
+            <button title="删除批注"
+              onClick={() => { deleteAnnotation(selectedAnnotId); setSelectedAnnotId(null) }}
+              className="w-8 h-8 flex items-center justify-center rounded-md text-red-500 hover:bg-red-50">
+              <IconTrash />
+            </button>
+            <button title="取消选中"
+              onClick={() => setSelectedAnnotId(null)}
+              className="w-6 h-6 flex items-center justify-center rounded-md text-brown-mute hover:bg-cream text-xs ml-0.5">
+              ✕
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Manual page navigation */}
