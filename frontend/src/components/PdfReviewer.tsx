@@ -137,7 +137,7 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
   const [aspectRatio, setAspectRatio] = useState(0.707)
   const [totalDurationS, setTotalDurationS] = useState(0)
   const [recordingStartTime, setRecordingStartTime] = useState<string | null>(null)
-  const [syncOffsetMs, setSyncOffsetMs] = useState(1500)
+  const [syncOffsetMs, setSyncOffsetMs] = useState(0)
   const containerRef = useRef<HTMLDivElement>(null)
   const [containerW, setContainerW] = useState(0)
   const pdfDocOptions = useMemo(() => ({}), [])
@@ -224,6 +224,16 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
     setNumPages(0)
     setManualOverride(true)
   }
+
+  // 翻页或切 PDF 时自动清掉未提交的文字输入框
+  useEffect(() => {
+    setPendingPos(null); setPendingText('')
+  }, [currentPage, activePdf])
+
+  // 切到非 text 工具时清掉未提交的文字输入框
+  useEffect(() => {
+    if (activeTool !== 'text') { setPendingPos(null); setPendingText('') }
+  }, [activeTool])
 
   const isNarrow = winW < 768
   const showDualFromEvent = getShowDual(activePdf, currentPage, pageEvents)
@@ -506,14 +516,14 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
 
           {/* Sync offset slider */}
           <div className="flex items-center justify-between text-xs mt-1">
-            <span className="text-brown-mute font-bold shrink-0">提前同步</span>
+            <span className="text-brown-mute font-bold shrink-0">时间偏移</span>
             <div className="flex items-center gap-2 flex-1 ml-3">
-              <input type="range" min={0} max={4000} step={100}
+              <input type="range" min={-2000} max={2000} step={100}
                 value={syncOffsetMs}
                 onChange={e => setSyncOffsetMs(Number(e.target.value))}
                 className="flex-1 accent-peach" />
               <span className="text-brown-text font-extrabold tabular-nums w-14 text-right">
-                {(syncOffsetMs / 1000).toFixed(1)}s
+                {(syncOffsetMs >= 0 ? '+' : '') + (syncOffsetMs / 1000).toFixed(1)}s
               </span>
             </div>
           </div>
@@ -628,12 +638,21 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
                     }}>
                     {/* 待输入文字定位框 */}
                     {pendingPos && (
-                      <div className="absolute z-10" style={{ left: `${pendingPos.x * 100}%`, top: `${pendingPos.y * 100}%` }}>
+                      <div className="absolute z-10 flex items-center gap-1"
+                        style={{ left: `${pendingPos.x * 100}%`, top: `${pendingPos.y * 100}%` }}>
                         <input autoFocus value={pendingText} onChange={e => setPendingText(e.target.value)}
                           onClick={e => e.stopPropagation()}
-                          onKeyDown={e => { if (e.key === 'Enter') saveAnnotation() }}
-                          placeholder="输入提示…"
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') saveAnnotation()
+                            else if (e.key === 'Escape') { setPendingPos(null); setPendingText('') }
+                          }}
+                          placeholder="输入提示，回车保存…"
                           className="text-xs bg-white border-2 border-peach rounded px-2 py-1 shadow-lg w-40" />
+                        <button type="button"
+                          onClick={() => { setPendingPos(null); setPendingText('') }}
+                          className="w-5 h-5 rounded-full bg-white border-2 border-peach text-peach text-xs
+                                     font-bold shadow flex items-center justify-center shrink-0"
+                          aria-label="取消">×</button>
                       </div>
                     )}
                     {/* 正在绘制的笔画实时预览 */}
@@ -691,12 +710,22 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
                           }
                         }}>
                         <span className="inline-block text-[11px] font-bold text-white px-2 py-0.5 rounded-full shadow-md whitespace-nowrap"
-                          style={{ background: a.color, position: 'relative' }}>
+                          style={{ background: a.color, position: 'relative',
+                                   outline: (!deleteMode && !activeTool) ? '1.5px dashed rgba(255,255,255,0.45)' : 'none',
+                                   outlineOffset: '2px' }}>
+                          {!deleteMode && !activeTool && (
+                            <span className="absolute -left-2 -top-2 w-4 h-4 bg-peach/80 rounded-full
+                                             flex items-center justify-center text-white text-[9px] shadow"
+                                  style={{ pointerEvents: 'none', lineHeight: 1 }}>
+                              ⠿
+                            </span>
+                          )}
                           {deleteMode ? '🗑 ' : ''}{a.message}
                           {!deleteMode && !activeTool && (
                             <span
-                              className="absolute -right-1.5 -bottom-1.5 w-3 h-3 bg-white border-2 border-peach rounded-full"
-                              style={{ cursor: 'nwse-resize', pointerEvents: 'auto' }}
+                              className="absolute -right-2 -bottom-2 w-5 h-5 bg-peach border-2 border-white rounded-full
+                                         flex items-center justify-center text-white text-[10px] font-bold shadow-md"
+                              style={{ cursor: 'nwse-resize', pointerEvents: 'auto', touchAction: 'none' }}
                               onPointerDown={e => {
                                 e.stopPropagation()
                                 resizingRef.current = {
@@ -705,7 +734,7 @@ export default function PdfReviewer({ sessionId, audioElement, mode = 'reading' 
                                   startScale: a.font_scale ?? 1.0,
                                 }
                               }}
-                            />
+                            >↘</span>
                           )}
                         </span>
                       </div>
