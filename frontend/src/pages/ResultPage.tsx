@@ -18,6 +18,7 @@ interface Session {
   pdfs_required: number
   time_in_window: number
   session_type?: string
+  qualifies_for_egg?: number
 }
 
 const STATUS_INFO: Record<string, { label: string; bg: string; text: string }> = {
@@ -97,13 +98,11 @@ export default function ResultPage() {
   const info         = STATUS_INFO[session.status] ?? { label: session.status, bg: 'bg-[#F5E8DD]', text: 'text-brown-text' }
   const notInWindow  = !session.time_in_window
   const isRecitation = session.session_type === 'recitation'
-  const durationMet  = session.status !== 'time_short'
-  const pdfMet       = session.pdfs_opened >= session.pdfs_required
   const silenceRatio = session.total_duration_s > 0
     ? session.total_silence_s / session.total_duration_s
     : 1
-  const silenceMet   = silenceRatio <= 0.5
-  const qualifies    = (durationMet || pdfMet) && silenceMet
+  // v3: 彩蛋 3 条件 AND（时长 + 时段 + N 本全读完），由后端 qualifies_for_egg 字段决定
+  const qualifies    = !!session.qualifies_for_egg
 
   return (
     <div className="min-h-screen bg-cream flex flex-col items-center justify-center px-6 py-12">

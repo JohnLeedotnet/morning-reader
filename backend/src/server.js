@@ -150,13 +150,7 @@ function getTodayPool(childId) {
   `).get(childId)
   if (!child || !child.cursor_library_id) return []
   const baseCount = child.daily_count || 3
-
-  // cursor 那本是否已达 advance_after_reads 且需要背诵（= 卡住等背诵）
-  const cursorCount = db.prepare('SELECT count FROM pdf_read_counts WHERE child_id=? AND library_id=?')
-    .get(childId, child.cursor_library_id)?.count || 0
-  const advanceThreshold = child.advance_after_reads || 5
-  const stuck = child.requires_recitation && cursorCount >= advanceThreshold
-  const limit = stuck ? baseCount + 1 : baseCount
+  const limit = baseCount   // v3: 朗读集合始终 N 本，删 stuck 分支
 
   // 按 (category_path, id) 从 cursor 起取 limit 本
   const cursorLib = db.prepare('SELECT category_path, id FROM pdf_library WHERE id=?').get(child.cursor_library_id)
@@ -750,6 +744,12 @@ function finishSessionWithRecording(req, res, session, recordingPath, metrics) {
   else if (max_silence_s > parseInt(config.max_consecutive_silence_s)) status = 'long_pause'
   else if (total_duration_s > 0 && total_silence_s / total_duration_s > parseFloat(config.max_silence_ratio)) status = 'high_silence'
   else if (pdfsOpened < session.pdfs_required) status = 'pdf_insufficient'
+  // v3: 彩蛋 3 条件 AND（与静音/停顿无关）
+  const qualifiesForEgg = (
+    total_duration_s >= minDur &&
+    timeInWindow === 1 &&
+    pdfsOpened >= session.pdfs_required
+  ) ? 1 : 0
   const silenceRatio = total_duration_s > 0 ? total_silence_s / total_duration_s : 1
   const tooShort = total_duration_s < AUTO_DISCARD_MIN_DURATION_S
   const tooSilent = silenceRatio > AUTO_DISCARD_MAX_SILENCE_RATIO
@@ -764,9 +764,9 @@ function finishSessionWithRecording(req, res, session, recordingPath, metrics) {
     UPDATE reading_sessions SET
       end_time = ?, recording_path = ?, total_duration_s = ?, silence_count = ?,
       max_silence_s = ?, total_silence_s = ?, pdfs_opened = ?, time_in_window = ?, status = ?,
-      recording_start_time = ?
+      recording_start_time = ?, qualifies_for_egg = ?
     WHERE id = ?
-  `).run(endTime, recordingPath, total_duration_s, silence_count, max_silence_s, total_silence_s, pdfsOpened, timeInWindow, status, recording_start_ts ?? null, sessionId)
+  `).run(endTime, recordingPath, total_duration_s, silence_count, max_silence_s, total_silence_s, pdfsOpened, timeInWindow, status, recording_start_ts ?? null, qualifiesForEgg, sessionId)
   res.json(db.prepare('SELECT * FROM reading_sessions WHERE id = ?').get(sessionId))
 }
 
@@ -1505,6 +1505,26 @@ app.delete('/api/admin/children/:id', requireParent, (req, res) => {
     db.prepare('DELETE FROM children WHERE id = ?').run(id)
     res.json({ ok: true })
   } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// ── Sprint Rotation-2 M1.3: 重置考核状态 ─────────────────────────────────────
+
+app.post('/api/admin/children/:id/reset-exam', requireParent, (req, res) => {
+  try {
+    const childId = req.params.id
+    if (!db.prepare('SELECT 1 FROM children WHERE id=? AND account_id=?').get(childId, req.accountId)) {
+      return res.status(404).json({ error: 'child not found' })
+    }
+    const tx = db.transaction(() => {
+      db.prepare("DELETE FROM recitation_plans WHERE child_id=? AND status IN ('scheduled','retry','submitted','pending_review')").run(childId)
+      db.prepare('DELETE FROM pdf_read_counts WHERE child_id=?').run(childId)
+      db.prepare('DELETE FROM pdf_read_counts_session_mark WHERE session_id IN (SELECT id FROM reading_sessions WHERE child_id=?)').run(childId)
+    })
+    tx()
+    res.json({ ok: true, reset: true })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
 })
 
 // ── Admin pool management ─────────────────────────────────────────────────────

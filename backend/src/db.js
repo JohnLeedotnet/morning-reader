@@ -76,6 +76,7 @@ try { db.exec('ALTER TABLE pdf_reads ADD COLUMN completed INTEGER DEFAULT 0'); }
 try { db.exec('ALTER TABLE pdf_page_events ADD COLUMN is_dual INTEGER DEFAULT 0'); } catch(_) {}
 try { db.exec('ALTER TABLE children ADD COLUMN pdf_dir TEXT'); } catch(_) {}
 try { db.exec("ALTER TABLE reading_sessions ADD COLUMN recording_start_time TEXT"); } catch(_) {}
+try { db.exec('ALTER TABLE reading_sessions ADD COLUMN qualifies_for_egg INTEGER DEFAULT 0'); } catch(_) {}
 db.exec(`
   CREATE TABLE IF NOT EXISTS pdf_page_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

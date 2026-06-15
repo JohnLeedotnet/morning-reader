@@ -514,9 +514,87 @@ function ChildExamConfigCard({ child, localData, onChangeCursor, onChange, onSav
   onSave: () => void
   saving: boolean
 }) {
+  const [showResetModal, setShowResetModal] = useState(false)
+  const [resetPin, setResetPin] = useState('')
+  const [resetState, setResetState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle')
+  const [resetError, setResetError] = useState('')
+
+  const handleReset = async () => {
+    if (!resetPin) return
+    setResetState('loading')
+    setResetError('')
+    try {
+      // 先 verify-pin 确认家长 cookie 有效（Sprint 1B 后 PIN 为纯 cookie 鉴权）
+      const verify = await adminFetch('/api/admin/verify-pin', { method: 'POST' })
+      if (!verify.ok) throw new Error('鉴权失败，请重新登录')
+      const res = await adminFetch(`/api/admin/children/${child.id}/reset-exam`, { method: 'POST' })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.error || `HTTP ${res.status}`)
+      }
+      setResetState('done')
+      setTimeout(() => { setShowResetModal(false); setResetState('idle'); setResetPin('') }, 1500)
+    } catch (e: unknown) {
+      setResetState('error')
+      setResetError(e instanceof Error ? e.message : '重置失败')
+    }
+  }
+
   return (
     <div className="bg-white rounded-[20px] p-5 shadow-[0_4px_24px_rgba(224,122,95,0.08)]">
-      <h3 className="text-xl font-extrabold text-brown-text mb-4">{child.name}</h3>
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-xl font-extrabold text-brown-text">{child.name}</h3>
+        <button
+          onClick={() => { setShowResetModal(true); setResetState('idle'); setResetPin(''); setResetError('') }}
+          className="text-xs font-extrabold text-red-500 border border-red-400 px-2.5 py-1 rounded-[8px]
+            hover:bg-red-50 transition-colors">
+          ⚠ 重置考核
+        </button>
+      </div>
+
+      {showResetModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-[20px] p-6 w-full max-w-[360px] mx-4 shadow-xl">
+            <h4 className="text-lg font-extrabold text-brown-text mb-3">重置 {child.name} 考核状态</h4>
+            <div className="bg-[#FFF5F5] border border-red-200 rounded-[12px] p-3 mb-4 text-sm text-red-700 space-y-1">
+              <p className="font-bold">以下内容将被清除：</p>
+              <p>• 待背诵 / 已提交背诵任务</p>
+              <p>• 历史朗读次数（pdf_read_counts）</p>
+              <p className="text-brown-mute font-bold">起点 PDF 不动（换起点请用"更换起点"）</p>
+            </div>
+            <input
+              type="password"
+              inputMode="numeric"
+              placeholder="输入家长 PIN 确认"
+              value={resetPin}
+              onChange={e => setResetPin(e.target.value)}
+              className="w-full bg-cream rounded-[10px] px-3 py-2.5 text-center text-lg font-extrabold
+                tracking-widest text-brown-text border-2 border-transparent focus:border-red-400 outline-none mb-4"
+            />
+            {resetState === 'error' && (
+              <p className="text-red-500 text-sm text-center mb-3">{resetError}</p>
+            )}
+            {resetState === 'done' && (
+              <p className="text-green-600 text-sm text-center mb-3">✓ 重置成功</p>
+            )}
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowResetModal(false)}
+                className="flex-1 py-2.5 rounded-[12px] font-extrabold text-brown-mute bg-cream hover:bg-[#EDE0D4] transition-colors">
+                取消
+              </button>
+              <button
+                onClick={handleReset}
+                disabled={!resetPin || resetState === 'loading' || resetState === 'done'}
+                className="flex-1 py-2.5 rounded-[12px] font-extrabold text-white bg-red-500
+                  hover:bg-red-600 transition-colors disabled:opacity-40">
+                {resetState === 'loading' ? '重置中...' : '确认重置'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
 
       <p className="text-sm font-extrabold text-brown-text mb-1.5">起点 PDF</p>
       <div className="bg-cream rounded-[10px] p-3 mb-2">
