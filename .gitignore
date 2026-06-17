@@ -15,8 +15,9 @@ frontend/certs/
 *.pem
 *.key
 .env
-.env.local
-.env.*.local
+.env.*
+backend/.env
+frontend/.env
 
 # ── 系统/编辑器 ───────────────────────────────────
 .DS_Store
@@ -30,7 +31,7 @@ Morning Reader.xcodeproj/xcuserdata/
 *.xcuserdatad/
 
 # ── Claude / 临时 ─────────────────────────────────
-.claude/settings.local.json
+.claude/
 *.log
 *.tmp
 
@@ -38,3 +39,6 @@ Morning Reader.xcodeproj/xcuserdata/
 data.backup-*/
 **/nas.env
 **/cloudflared.env
+
+# 设计 mockup（Homer 决定后再入库）
+design-mockups/
