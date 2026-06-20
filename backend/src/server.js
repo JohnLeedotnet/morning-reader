@@ -1128,8 +1128,13 @@ app.post('/api/admin/sessions/:id/review', requireParent, (req, res) => {
     // Recitation: advance cursor on pass (via advanceCursor), mark plan on redo
     if (sessionBefore && sessionBefore.session_type === 'recitation' && sessionBefore.plan_id) {
       if (decision === 'passed') {
+        const planRow = db.prepare('SELECT auto FROM recitation_plans WHERE id=?').get(sessionBefore.plan_id)
         db.prepare("UPDATE recitation_plans SET status = 'passed' WHERE id = ?").run(sessionBefore.plan_id)
-        advanceCursor(session.child_id)
+        if (planRow && planRow.auto === 1) {
+          advanceCursor(session.child_id)
+        } else {
+          console.log(`[Rotation-3] manual plan passed, cursor 不动 (child=${session.child_id} plan=${sessionBefore.plan_id})`)
+        }
       } else if (decision === 'redo') {
         db.prepare("UPDATE recitation_plans SET status = 'retry' WHERE id = ?").run(sessionBefore.plan_id)
       }
@@ -1176,7 +1181,7 @@ app.get('/api/children/:id/today-recitation', (req, res) => {
     const today = todayLocal()
     // 1. 取任何 active plan（不再限今天日期）
     let plan = db.prepare(
-      "SELECT * FROM recitation_plans WHERE child_id=? AND status IN ('scheduled','retry') ORDER BY id ASC LIMIT 1"
+      "SELECT * FROM recitation_plans WHERE child_id=? AND status IN ('scheduled','retry','submitted','pending_review') ORDER BY id ASC LIMIT 1"
     ).get(childId)
     if (plan) return res.json(plan)
 
